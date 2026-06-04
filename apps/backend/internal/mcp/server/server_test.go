@@ -210,9 +210,9 @@ func TestServerModeTask_ToolCount(t *testing.T) {
 
 	s := New(backend, "test-session", "test-task", 10005, log, "", false, ModeTask)
 	tools := getRegisteredToolNames(s)
-	// 13 kanban (incl. delete + archive task) + 1 add_branch_to_task + 1 interaction
-	// + 4 plan + 1 related-tasks = 20. Task-document tools (list/get/write) are office-only.
-	assert.Equal(t, 20, len(tools))
+	// 13 kanban (incl. delete + archive task) + 1 add_branch_to_task + 1 step_complete (ADR 0015) + 1 interaction
+	// + 4 plan + 1 related-tasks = 21. Task-document tools (list/get/write) are office-only.
+	assert.Equal(t, 21, len(tools))
 }
 
 func TestServerModeConfig_ToolCount(t *testing.T) {
