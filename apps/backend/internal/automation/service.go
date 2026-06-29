@@ -232,6 +232,43 @@ func (s *Service) DeleteAllRuns(ctx context.Context, automationID string) error 
 	return s.store.DeleteAllRuns(ctx, automationID)
 }
 
+// DeleteRunForWorkspace deletes a single run only when its parent automation
+// belongs to workspaceID. Returns (false, nil) for a missing run or a
+// cross-workspace attempt so the handler can surface NOT_FOUND without leaking
+// whether the ID exists across workspace boundaries.
+// TaskDeleter is never called when ownership check fails.
+func (s *Service) DeleteRunForWorkspace(ctx context.Context, runID, workspaceID string) (bool, error) {
+	run, err := s.store.GetRun(ctx, runID)
+	if err != nil {
+		return false, fmt.Errorf("get run: %w", err)
+	}
+	if run == nil {
+		return false, nil
+	}
+	a, err := s.store.GetAutomation(ctx, run.AutomationID)
+	if err != nil {
+		return false, fmt.Errorf("get automation: %w", err)
+	}
+	if a == nil || a.WorkspaceID != workspaceID {
+		return false, nil
+	}
+	return true, s.DeleteRun(ctx, runID)
+}
+
+// DeleteAllRunsForWorkspace deletes all runs for an automation only when it
+// belongs to workspaceID. Returns (false, nil) for a missing automation or a
+// cross-workspace attempt. TaskDeleter is never called when ownership fails.
+func (s *Service) DeleteAllRunsForWorkspace(ctx context.Context, automationID, workspaceID string) (bool, error) {
+	a, err := s.store.GetAutomation(ctx, automationID)
+	if err != nil {
+		return false, fmt.Errorf("get automation: %w", err)
+	}
+	if a == nil || a.WorkspaceID != workspaceID {
+		return false, nil
+	}
+	return true, s.DeleteAllRuns(ctx, automationID)
+}
+
 // --- Trigger firing ---
 
 // FireTrigger publishes an AutomationTriggered event for the given trigger.

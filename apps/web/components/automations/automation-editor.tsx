@@ -248,6 +248,11 @@ function getSaveLabel(saving: boolean, isNew: boolean): string {
   return isNew ? "Create Automation" : "Save Changes";
 }
 
+function getCanSave(form: FormState): boolean {
+  const isRunMode = form.executionMode === "run";
+  return form.name.trim().length > 0 && (isRunMode || (!!form.workflowId && !!form.workflowStepId));
+}
+
 /** Loads an existing automation on mount and populates form + trigger state. */
 function useLoadAutomation(
   automationId: string | null,
@@ -347,9 +352,7 @@ export function AutomationEditor({ workspaceId, automationId }: AutomationEditor
     router.push(`/settings/workspace/${workspaceId}/automations`);
   };
 
-  const isRunMode = form.executionMode === "run";
-  const canSave =
-    form.name.trim().length > 0 && (isRunMode || (!!form.workflowId && !!form.workflowStepId));
+  const canSave = getCanSave(form);
 
   return (
     <div className="max-w-3xl space-y-6" data-testid="automation-editor">
@@ -389,7 +392,11 @@ export function AutomationEditor({ workspaceId, automationId }: AutomationEditor
       <Separator />
       <SettingsSection form={form} updateField={updateField} />
       <Separator />
-      <RunsSection automationId={currentId} executionMode={form.executionMode} />
+      <RunsSection
+        automationId={currentId}
+        executionMode={form.executionMode}
+        workspaceId={workspaceId}
+      />
       <EditorFooter
         canSave={canSave}
         saving={saving}

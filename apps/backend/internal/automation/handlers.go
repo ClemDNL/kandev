@@ -300,8 +300,16 @@ func wsDeleteRun(svc *Service, _ *logger.Logger) func(ctx context.Context, msg *
 		if runID == "" {
 			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeBadRequest, "run_id required", nil)
 		}
-		if err := svc.DeleteRun(ctx, runID); err != nil {
+		workspaceID, _ := payload["workspace_id"].(string)
+		if workspaceID == "" {
+			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeBadRequest, "workspace_id required", nil)
+		}
+		ok, err := svc.DeleteRunForWorkspace(ctx, runID, workspaceID)
+		if err != nil {
 			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeInternalError, err.Error(), nil)
+		}
+		if !ok {
+			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeNotFound, "run not found", nil)
 		}
 		return ws.NewResponse(msg.ID, msg.Action, map[string]bool{"deleted": true})
 	}
@@ -314,8 +322,16 @@ func wsDeleteAllRuns(svc *Service, _ *logger.Logger) func(ctx context.Context, m
 		if automationID == "" {
 			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeBadRequest, "automation_id required", nil)
 		}
-		if err := svc.DeleteAllRuns(ctx, automationID); err != nil {
+		workspaceID, _ := payload["workspace_id"].(string)
+		if workspaceID == "" {
+			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeBadRequest, "workspace_id required", nil)
+		}
+		ok, err := svc.DeleteAllRunsForWorkspace(ctx, automationID, workspaceID)
+		if err != nil {
 			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeInternalError, err.Error(), nil)
+		}
+		if !ok {
+			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeNotFound, "automation not found", nil)
 		}
 		return ws.NewResponse(msg.ID, msg.Action, map[string]bool{"deleted": true})
 	}

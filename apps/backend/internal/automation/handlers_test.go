@@ -209,7 +209,7 @@ func TestWsDeleteRun_DeletesRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req, err := ws.NewRequest("req-del", ws.ActionAutomationRunDelete, map[string]string{"run_id": run.ID})
+	req, err := ws.NewRequest("req-del", ws.ActionAutomationRunDelete, map[string]string{"run_id": run.ID, "workspace_id": "ws-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestWsDeleteAllRuns_ClearsAllRuns(t *testing.T) {
 		}
 	}
 
-	req, err := ws.NewRequest("req-all", ws.ActionAutomationRunsDeleteAll, map[string]string{"automation_id": a.ID})
+	req, err := ws.NewRequest("req-all", ws.ActionAutomationRunsDeleteAll, map[string]string{"automation_id": a.ID, "workspace_id": "ws-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,6 +285,152 @@ func TestWsDeleteAllRuns_ClearsAllRuns(t *testing.T) {
 	runs, _ := svc.store.ListRuns(ctx, a.ID, 50)
 	if len(runs) != 0 {
 		t.Errorf("expected 0 runs after delete-all, got %d", len(runs))
+	}
+}
+
+func TestWsDeleteRun_RequiresWorkspaceID(t *testing.T) {
+	svc := newTestService(t)
+	log, _ := logger.NewFromZap(zap.NewNop())
+	ctx := context.Background()
+
+	req, err := ws.NewRequest("req-1", ws.ActionAutomationRunDelete, map[string]string{"run_id": "some-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := wsDeleteRun(svc, log)(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ep ws.ErrorPayload
+	_ = json.Unmarshal(resp.Payload, &ep)
+	if ep.Code != ws.ErrorCodeBadRequest {
+		t.Errorf("expected BAD_REQUEST for missing workspace_id, got %q", ep.Code)
+	}
+}
+
+func TestWsDeleteRun_RejectsCrossWorkspace(t *testing.T) {
+	svc := newTestService(t)
+	deleter := &fakeTaskDeleter{}
+	svc.SetTaskDeleter(deleter)
+	log, _ := logger.NewFromZap(zap.NewNop())
+	ctx := context.Background()
+
+	// Create automation in workspace A.
+	a := &Automation{WorkspaceID: "ws-A", Name: "X", WorkflowID: "wf-1", WorkflowStepID: "s-1", Enabled: true}
+	if err := svc.store.CreateAutomation(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	run := &AutomationRun{
+		AutomationID: a.ID,
+		TriggerType:  TriggerTypeScheduled,
+		Status:       RunStatusSkipped,
+		TriggerData:  json.RawMessage(`{}`),
+	}
+	if err := svc.store.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete with workspace B — must return NOT_FOUND without deleting the run or calling TaskDeleter.
+	req, err := ws.NewRequest("req-del", ws.ActionAutomationRunDelete,
+		map[string]string{"run_id": run.ID, "workspace_id": "ws-B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := wsDeleteRun(svc, log)(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != ws.MessageTypeError {
+		t.Fatalf("expected error response for cross-workspace delete, got %v", resp.Type)
+	}
+	var ep ws.ErrorPayload
+	if err := json.Unmarshal(resp.Payload, &ep); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ep.Code != ws.ErrorCodeNotFound {
+		t.Errorf("expected NOT_FOUND, got %q", ep.Code)
+	}
+	// Run row must still exist.
+	got, _ := svc.store.GetRun(ctx, run.ID)
+	if got == nil {
+		t.Error("cross-workspace delete must not remove the run row")
+	}
+	// TaskDeleter must never have been called.
+	if len(deleter.deleted) != 0 {
+		t.Errorf("TaskDeleter must not be called on cross-workspace reject, got calls: %v", deleter.deleted)
+	}
+}
+
+func TestWsDeleteAllRuns_RequiresWorkspaceID(t *testing.T) {
+	svc := newTestService(t)
+	log, _ := logger.NewFromZap(zap.NewNop())
+	ctx := context.Background()
+
+	req, err := ws.NewRequest("req-1", ws.ActionAutomationRunsDeleteAll, map[string]string{"automation_id": "some-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := wsDeleteAllRuns(svc, log)(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ep ws.ErrorPayload
+	_ = json.Unmarshal(resp.Payload, &ep)
+	if ep.Code != ws.ErrorCodeBadRequest {
+		t.Errorf("expected BAD_REQUEST for missing workspace_id, got %q", ep.Code)
+	}
+}
+
+func TestWsDeleteAllRuns_RejectsCrossWorkspace(t *testing.T) {
+	svc := newTestService(t)
+	deleter := &fakeTaskDeleter{}
+	svc.SetTaskDeleter(deleter)
+	log, _ := logger.NewFromZap(zap.NewNop())
+	ctx := context.Background()
+
+	// Create automation in workspace A with a run.
+	a := &Automation{WorkspaceID: "ws-A", Name: "Y", WorkflowID: "wf-1", WorkflowStepID: "s-1", Enabled: true}
+	if err := svc.store.CreateAutomation(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	run := &AutomationRun{
+		AutomationID: a.ID,
+		TriggerType:  TriggerTypeScheduled,
+		Status:       RunStatusSkipped,
+		TriggerData:  json.RawMessage(`{}`),
+	}
+	if err := svc.store.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete-all with workspace B — must return NOT_FOUND without deleting runs or calling TaskDeleter.
+	req, err := ws.NewRequest("req-all", ws.ActionAutomationRunsDeleteAll,
+		map[string]string{"automation_id": a.ID, "workspace_id": "ws-B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := wsDeleteAllRuns(svc, log)(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != ws.MessageTypeError {
+		t.Fatalf("expected error response for cross-workspace delete-all, got %v", resp.Type)
+	}
+	var ep ws.ErrorPayload
+	if err := json.Unmarshal(resp.Payload, &ep); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ep.Code != ws.ErrorCodeNotFound {
+		t.Errorf("expected NOT_FOUND, got %q", ep.Code)
+	}
+	// Run rows must still exist.
+	runs, _ := svc.store.ListRuns(ctx, a.ID, 50)
+	if len(runs) == 0 {
+		t.Error("cross-workspace delete-all must not remove run rows")
+	}
+	// TaskDeleter must never have been called.
+	if len(deleter.deleted) != 0 {
+		t.Errorf("TaskDeleter must not be called on cross-workspace reject, got calls: %v", deleter.deleted)
 	}
 }
 

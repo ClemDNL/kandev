@@ -321,6 +321,7 @@ test.describe("Automations settings page", () => {
     // Delete-all button should be visible in the header.
     const deleteAllBtn = testPage.getByTestId("delete-all-runs");
     await expect(deleteAllBtn).toBeVisible();
+    const refreshBtn = testPage.getByTestId("refresh-runs");
 
     // Hover over the first row to reveal its delete button and click it.
     const firstRow = tbody.locator("tr").first();
@@ -329,14 +330,22 @@ test.describe("Automations settings page", () => {
     await expect(deleteRowBtn).toBeVisible();
     await deleteRowBtn.click();
 
-    // One run removed — table should now have 1 row.
+    // One run removed optimistically — table should show 1 row.
     await expect(tbody.locator("tr")).toHaveCount(1, { timeout: 5_000 });
+
+    // Force a server-backed refresh and assert the deletion persisted.
+    await refreshBtn.click();
+    await expect(tbody.locator("tr")).toHaveCount(1, { timeout: 10_000 });
 
     // Delete all remaining runs — click trigger, then confirm in the dialog.
     await deleteAllBtn.click();
     await testPage.getByTestId("delete-all-runs-confirm").click();
 
-    // Table should show the empty state.
+    // Optimistic state shows empty.
     await expect(testPage.getByText("No runs yet")).toBeVisible({ timeout: 5_000 });
+
+    // Force a server-backed refresh and assert the deletion persisted.
+    await refreshBtn.click();
+    await expect(testPage.getByText("No runs yet")).toBeVisible({ timeout: 10_000 });
   });
 });

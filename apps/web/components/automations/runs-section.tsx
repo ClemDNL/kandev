@@ -25,6 +25,7 @@ import { formatRelativeTime } from "./format-utils";
 type RunsSectionProps = {
   automationId: string | null;
   executionMode: ExecutionMode;
+  workspaceId: string;
 };
 
 const STATUS_BADGE: Record<
@@ -74,12 +75,13 @@ function RunRow({ run, taskClickable, onDelete, onNavigate }: RunRowProps) {
         <Button
           variant="ghost"
           size="icon-sm"
-          className="cursor-pointer text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100"
+          className="cursor-pointer text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
             onDelete(run.id);
           }}
+          aria-label="Delete run"
           title="Delete run"
           data-testid="delete-run"
         >
@@ -111,8 +113,8 @@ function DeleteAllButton({ count, disabled, onConfirm }: DeleteAllButtonProps) {
         <AlertDialogHeader>
           <AlertDialogTitle>Delete all runs?</AlertDialogTitle>
           <AlertDialogDescription>
-            This will permanently remove all {count} run records and their associated tasks. This
-            cannot be undone.
+            This will permanently remove all {count} run records and their associated tasks and
+            sessions. This cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -130,9 +132,12 @@ function DeleteAllButton({ count, disabled, onConfirm }: DeleteAllButtonProps) {
   );
 }
 
-export function RunsSection({ automationId, executionMode }: RunsSectionProps) {
+export function RunsSection({ automationId, executionMode, workspaceId }: RunsSectionProps) {
   const [expanded, setExpanded] = useState(false);
-  const { runs, loading, refresh, deleteRun, deleteAllRuns } = useAutomationRuns(automationId);
+  const { runs, loading, refresh, deleteRun, deleteAllRuns } = useAutomationRuns(
+    automationId,
+    workspaceId,
+  );
   const router = useRouter();
 
   if (!automationId) return null;
@@ -162,6 +167,7 @@ export function RunsSection({ automationId, executionMode }: RunsSectionProps) {
               onClick={refresh}
               disabled={loading}
               title="Refresh"
+              data-testid="refresh-runs"
             >
               <IconRefresh className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             </Button>
