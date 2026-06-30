@@ -29,6 +29,13 @@ func (s *Service) PublishTaskDeleted(ctx context.Context, task *models.Task) {
 	s.publishTaskEvent(ctx, events.TaskDeleted, task, nil)
 }
 
+// GetTasksForDeletion returns task snapshots before an external transactional
+// deleter removes them. Callers use the snapshots to publish task.deleted
+// events after their transaction commits.
+func (s *Service) GetTasksForDeletion(ctx context.Context, taskIDs []string) ([]*models.Task, error) {
+	return s.tasks.GetTasksByIDs(ctx, taskIDs)
+}
+
 // publishTaskEvent publishes task events to the event bus
 func (s *Service) publishTaskEvent(ctx context.Context, eventType string, task *models.Task, oldState *v1.TaskState, oldWorkflowIDs ...string) {
 	if s.eventBus == nil {

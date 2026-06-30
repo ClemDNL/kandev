@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { IconChevronDown, IconChevronUp, IconRefresh, IconTrash } from "@tabler/icons-react";
 import { useAutomationRuns } from "@/hooks/domains/settings/use-automation-runs";
 import type { AutomationRun, ExecutionMode, RunStatus } from "@/lib/types/automation";
+import { TaskDeleteConfirmDialog } from "@/components/task/task-delete-confirm-dialog";
 import { formatRelativeTime } from "./format-utils";
 
 type RunsSectionProps = {
@@ -47,48 +48,82 @@ type RunRowProps = {
 };
 
 function RunRow({ run, taskClickable, onDelete, onNavigate }: RunRowProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const badge = STATUS_BADGE[run.status] ?? STATUS_BADGE.triggered;
   const rowClickable = taskClickable && !!run.task_id;
+  const taskLabel = run.task_id ? run.task_id.slice(0, 8) : null;
   return (
-    <TableRow
-      className={
-        rowClickable
-          ? "group cursor-pointer hover:bg-muted/50"
-          : "group hover:bg-transparent focus-within:bg-transparent"
-      }
-      onClick={rowClickable ? () => onNavigate(run.task_id) : undefined}
-    >
-      <TableCell className="text-sm">{run.trigger_type}</TableCell>
-      <TableCell>
-        <Badge variant={badge.variant}>{badge.label}</Badge>
-      </TableCell>
-      <TableCell className="text-sm font-mono">
-        {run.task_id ? run.task_id.slice(0, 8) : "-"}
-      </TableCell>
-      <TableCell className="text-sm text-muted-foreground">
-        {formatRelativeTime(run.created_at)}
-      </TableCell>
-      <TableCell className="text-sm text-destructive max-w-[200px] truncate">
-        {run.error_message || "-"}
-      </TableCell>
-      <TableCell>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="cursor-pointer text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            onDelete(run.id);
-          }}
-          aria-label="Delete run"
-          title="Delete run"
-          data-testid="delete-run"
-        >
-          <IconTrash className="h-3.5 w-3.5" />
-        </Button>
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow
+        className={
+          rowClickable
+            ? "group cursor-pointer hover:bg-muted/50"
+            : "group hover:bg-transparent focus-within:bg-transparent"
+        }
+        onClick={rowClickable ? () => onNavigate(run.task_id) : undefined}
+      >
+        <TableCell className="text-sm">{run.trigger_type}</TableCell>
+        <TableCell>
+          <Badge variant={badge.variant}>{badge.label}</Badge>
+        </TableCell>
+        <TableCell className="text-sm font-mono">
+          {run.task_id ? run.task_id.slice(0, 8) : "-"}
+        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">
+          {formatRelativeTime(run.created_at)}
+        </TableCell>
+        <TableCell className="text-sm text-destructive max-w-[200px] truncate">
+          {run.error_message || "-"}
+        </TableCell>
+        <TableCell>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="cursor-pointer text-muted-foreground hover:text-destructive opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              setConfirmOpen(true);
+            }}
+            aria-label="Delete run"
+            title="Delete run"
+            data-testid="delete-run"
+          >
+            <IconTrash className="h-3.5 w-3.5" />
+          </Button>
+        </TableCell>
+      </TableRow>
+      {taskLabel ? (
+        <TaskDeleteConfirmDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          taskTitle={`task ${taskLabel}`}
+          onConfirm={() => onDelete(run.id)}
+          confirmTestId="delete-run-confirm"
+        />
+      ) : (
+        <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete run?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete this run? This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="cursor-pointer bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => onDelete(run.id)}
+                data-testid="delete-run-confirm"
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+    </>
   );
 }
 

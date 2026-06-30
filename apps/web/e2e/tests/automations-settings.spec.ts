@@ -290,7 +290,7 @@ test.describe("Automations settings page", () => {
     seedData,
     apiClient,
   }) => {
-    // Seed an automation and two run rows via HTTP (avoids Node-24 WS requirement).
+    // Seed an automation, one plain run, and one task-backed run via HTTP.
     const automation = await apiClient.seedAutomation({
       workspaceId: seedData.workspaceId,
       name: "Run Delete Test",
@@ -298,7 +298,11 @@ test.describe("Automations settings page", () => {
       workflowStepId: seedData.startStepId,
     });
     await apiClient.seedAutomationRun(automation.id, "skipped");
-    await apiClient.seedAutomationRun(automation.id, "skipped");
+    const task = await apiClient.createTask(seedData.workspaceId, "Automation run task", {
+      workflow_id: seedData.workflowId,
+      workflow_step_id: seedData.startStepId,
+    });
+    await apiClient.seedAutomationRun(automation.id, "task_created", { taskId: task.id });
 
     // Navigate to the editor page for this automation.
     await testPage.goto(`/settings/workspace/${seedData.workspaceId}/automations/${automation.id}`);
@@ -329,6 +333,8 @@ test.describe("Automations settings page", () => {
     const deleteRowBtn = firstRow.getByTestId("delete-run");
     await expect(deleteRowBtn).toBeVisible();
     await deleteRowBtn.click();
+    await expect(testPage.getByRole("alertdialog", { name: "Delete task" })).toBeVisible();
+    await testPage.getByTestId("delete-run-confirm").click();
 
     // One run removed optimistically — table should show 1 row.
     await expect(tbody.locator("tr")).toHaveCount(1, { timeout: 5_000 });

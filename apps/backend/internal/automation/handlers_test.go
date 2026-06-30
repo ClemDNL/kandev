@@ -10,6 +10,7 @@ import (
 
 	"github.com/kandev/kandev/internal/common/logger"
 	"github.com/kandev/kandev/internal/events/bus"
+	taskmodels "github.com/kandev/kandev/internal/task/models"
 	taskrepo "github.com/kandev/kandev/internal/task/repository/sqlite"
 	ws "github.com/kandev/kandev/pkg/websocket"
 )
@@ -436,8 +437,11 @@ func TestWsDeleteAllRuns_RejectsCrossWorkspace(t *testing.T) {
 
 // fakeTaskDeleter records deletions and can inject errors per task ID.
 type fakeTaskDeleter struct {
-	deleted []string
-	errors  map[string]error
+	deleted          []string
+	errors           map[string]error
+	tasksForDeletion []*taskmodels.Task
+	published        []string
+	cleaned          []string
 }
 
 func (f *fakeTaskDeleter) DeleteTask(_ context.Context, id string) error {
@@ -448,6 +452,28 @@ func (f *fakeTaskDeleter) DeleteTask(_ context.Context, id string) error {
 		}
 	}
 	return nil
+}
+
+func (f *fakeTaskDeleter) GetTasksForDeletion(_ context.Context, ids []string) ([]*taskmodels.Task, error) {
+	byID := make(map[string]*taskmodels.Task, len(f.tasksForDeletion))
+	for _, task := range f.tasksForDeletion {
+		byID[task.ID] = task
+	}
+	tasks := make([]*taskmodels.Task, 0, len(ids))
+	for _, id := range ids {
+		if task := byID[id]; task != nil {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks, nil
+}
+
+func (f *fakeTaskDeleter) PublishTaskDeleted(_ context.Context, task *taskmodels.Task) {
+	f.published = append(f.published, task.ID)
+}
+
+func (f *fakeTaskDeleter) CleanupTaskResources(_ context.Context, taskID string, _ bool) {
+	f.cleaned = append(f.cleaned, taskID)
 }
 
 func TestService_DeleteRun_CallsTaskDeleter(t *testing.T) {
@@ -523,9 +549,12 @@ func TestService_DeleteRun_TaskNotFound_StillDeletesRun(t *testing.T) {
 
 func TestService_DeleteAllRuns_CallsTaskDeleterForEach(t *testing.T) {
 	svc := newTestService(t)
-	deleter := &fakeTaskDeleter{}
-	svc.SetTaskDeleter(deleter)
 	ctx := context.Background()
+	if _, err := svc.store.db.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT, state TEXT)`); err != nil {
+		t.Fatal("create tasks table:", err)
+	}
+	svc.SetTaskDeleter(&sqliteTaskDeleter{db: svc.store.db})
 
 	a := &Automation{WorkspaceID: "ws-1", Name: "C", WorkflowID: "wf-1", WorkflowStepID: "s-1", Enabled: true}
 	if err := svc.store.CreateAutomation(ctx, a); err != nil {
@@ -533,6 +562,10 @@ func TestService_DeleteAllRuns_CallsTaskDeleterForEach(t *testing.T) {
 	}
 	taskIDs := []string{"task-1", "task-2", "task-3"}
 	for _, tid := range taskIDs {
+		if _, err := svc.store.db.ExecContext(ctx,
+			`INSERT INTO tasks (id, title, state) VALUES (?, 'Test task', 'running')`, tid); err != nil {
+			t.Fatal("insert task:", err)
+		}
 		if err := svc.store.CreateRun(ctx, &AutomationRun{
 			AutomationID: a.ID,
 			TriggerType:  TriggerTypeScheduled,
@@ -557,9 +590,12 @@ func TestService_DeleteAllRuns_CallsTaskDeleterForEach(t *testing.T) {
 		t.Fatalf("DeleteAllRuns: %v", err)
 	}
 
-	// All three task IDs must have been passed to DeleteTask.
-	if len(deleter.deleted) != 3 {
-		t.Errorf("expected 3 task deletions, got %d: %v", len(deleter.deleted), deleter.deleted)
+	var taskCount int
+	if err := svc.store.db.GetContext(ctx, &taskCount, `SELECT COUNT(*) FROM tasks`); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 0 {
+		t.Errorf("expected 0 task rows, got %d", taskCount)
 	}
 	// All run rows gone.
 	runs, _ := svc.store.ListRuns(ctx, a.ID, 50)
@@ -568,17 +604,70 @@ func TestService_DeleteAllRuns_CallsTaskDeleterForEach(t *testing.T) {
 	}
 }
 
-func TestService_DeleteAllRuns_TaskNotFound_StillClearsRuns(t *testing.T) {
+func TestService_DeleteAllRuns_PublishesTaskEventsAndCleansResources(t *testing.T) {
 	svc := newTestService(t)
+	ctx := context.Background()
+	if _, err := svc.store.db.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT, state TEXT)`); err != nil {
+		t.Fatal("create tasks table:", err)
+	}
 	deleter := &fakeTaskDeleter{
-		errors: map[string]error{"task-stale": taskrepo.ErrTaskNotFound},
+		tasksForDeletion: []*taskmodels.Task{
+			{ID: "task-1", WorkspaceID: "ws-1", WorkflowID: "wf-1", WorkflowStepID: "s-1", Title: "Task 1"},
+			{ID: "task-2", WorkspaceID: "ws-1", WorkflowID: "wf-1", WorkflowStepID: "s-1", Title: "Task 2"},
+		},
 	}
 	svc.SetTaskDeleter(deleter)
+
+	a := &Automation{WorkspaceID: "ws-1", Name: "Events", WorkflowID: "wf-1", WorkflowStepID: "s-1", Enabled: true}
+	if err := svc.store.CreateAutomation(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	for _, tid := range []string{"task-1", "task-2"} {
+		if _, err := svc.store.db.ExecContext(ctx,
+			`INSERT INTO tasks (id, title, state) VALUES (?, 'Test task', 'running')`, tid); err != nil {
+			t.Fatal("insert task:", err)
+		}
+		if err := svc.store.CreateRun(ctx, &AutomationRun{
+			AutomationID: a.ID,
+			TriggerType:  TriggerTypeScheduled,
+			Status:       RunStatusTaskCreated,
+			TaskID:       tid,
+			TriggerData:  json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := svc.DeleteAllRuns(ctx, a.ID); err != nil {
+		t.Fatalf("DeleteAllRuns: %v", err)
+	}
+	for i, id := range []string{"task-1", "task-2"} {
+		if deleter.published[i] != id {
+			t.Fatalf("published task %d = %q, want %q", i, deleter.published[i], id)
+		}
+		if deleter.cleaned[i] != id {
+			t.Fatalf("cleaned task %d = %q, want %q", i, deleter.cleaned[i], id)
+		}
+	}
+}
+
+func TestService_DeleteAllRuns_TaskNotFound_StillClearsRuns(t *testing.T) {
+	svc := newTestService(t)
 	ctx := context.Background()
+	if _, err := svc.store.db.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT, state TEXT)`); err != nil {
+		t.Fatal("create tasks table:", err)
+	}
+	svc.SetTaskDeleter(&sqliteTaskDeleter{db: svc.store.db})
 
 	a := &Automation{WorkspaceID: "ws-1", Name: "D", WorkflowID: "wf-1", WorkflowStepID: "s-1", Enabled: true}
 	if err := svc.store.CreateAutomation(ctx, a); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := svc.store.db.ExecContext(ctx,
+		`INSERT INTO tasks (id, title, state) VALUES ('task-ok', 'Test task', 'running')`); err != nil {
+		t.Fatal("insert task:", err)
 	}
 	for _, tid := range []string{"task-stale", "task-ok"} {
 		if err := svc.store.CreateRun(ctx, &AutomationRun{
@@ -600,6 +689,77 @@ func TestService_DeleteAllRuns_TaskNotFound_StillClearsRuns(t *testing.T) {
 	if len(runs) != 0 {
 		t.Errorf("expected 0 runs after delete-all, got %d", len(runs))
 	}
+	var taskCount int
+	if err := svc.store.db.GetContext(ctx, &taskCount, `SELECT COUNT(*) FROM tasks`); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 0 {
+		t.Errorf("expected stale/missing task to be ignored and task-ok to be deleted, got %d rows", taskCount)
+	}
+}
+
+func TestService_DeleteAllRuns_TaskDeleteFailureRollsBack(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+
+	if _, err := store.db.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT, state TEXT)`); err != nil {
+		t.Fatal("create tasks table:", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TRIGGER fail_task_b_delete
+		BEFORE DELETE ON tasks
+		WHEN OLD.id = 'task-b'
+		BEGIN
+			SELECT RAISE(ABORT, 'task-b delete failed');
+		END;
+	`); err != nil {
+		t.Fatal("create failing trigger:", err)
+	}
+
+	log, _ := logger.NewFromZap(zap.NewNop())
+	eb := bus.NewMemoryEventBus(log)
+	svc := NewService(store, eb, log)
+	svc.SetTaskDeleter(&sqliteTaskDeleter{db: store.db})
+
+	a := &Automation{WorkspaceID: "ws-1", Name: "Rollback", WorkflowID: "wf-1", WorkflowStepID: "s-1", Enabled: true}
+	if err := store.CreateAutomation(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	for _, tid := range []string{"task-a", "task-b"} {
+		if _, err := store.db.ExecContext(ctx,
+			`INSERT INTO tasks (id, title, state) VALUES (?, 'Test task', 'running')`, tid); err != nil {
+			t.Fatal("insert task:", err)
+		}
+		if err := store.CreateRun(ctx, &AutomationRun{
+			AutomationID: a.ID,
+			TriggerType:  TriggerTypeScheduled,
+			Status:       RunStatusTaskCreated,
+			TaskID:       tid,
+			TriggerData:  json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := svc.DeleteAllRuns(ctx, a.ID); err == nil {
+		t.Fatal("DeleteAllRuns succeeded despite task delete failure")
+	}
+
+	runs, err := store.ListRuns(ctx, a.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected both run rows to remain after rollback, got %d", len(runs))
+	}
+	var taskCount int
+	if err := store.db.GetContext(ctx, &taskCount, `SELECT COUNT(*) FROM tasks`); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 2 {
+		t.Fatalf("expected both task rows to remain after rollback, got %d", taskCount)
+	}
 }
 
 // TestDeleteAllRuns_AutomationSurvives is a regression guard: deleting all run
@@ -618,14 +778,10 @@ func TestDeleteAllRuns_AutomationSurvives(t *testing.T) {
 		t.Fatal("create tasks table:", err)
 	}
 
-	// sqliteTaskDeleter deletes from the real tasks table in the same DB —
-	// any SQL cascade or trigger that touched automations would fire here.
-	realDeleter := &sqliteTaskDeleter{db: store.db}
-
 	log, _ := logger.NewFromZap(zap.NewNop())
 	eb := bus.NewMemoryEventBus(log)
 	svc := NewService(store, eb, log)
-	svc.SetTaskDeleter(realDeleter)
+	svc.SetTaskDeleter(&sqliteTaskDeleter{db: store.db})
 
 	a := &Automation{WorkspaceID: "ws-1", Name: "Survives", WorkflowID: "wf-1", WorkflowStepID: "s-1", Enabled: true}
 	if err := store.CreateAutomation(ctx, a); err != nil {
@@ -681,9 +837,12 @@ func TestDeleteAllRuns_AutomationSurvives(t *testing.T) {
 	if len(runs) != 0 {
 		t.Errorf("expected 0 runs, got %d", len(runs))
 	}
-	// Task rows should have been deleted.
-	if len(realDeleter.deleted) != 3 {
-		t.Errorf("expected 3 task deletions, got %d: %v", len(realDeleter.deleted), realDeleter.deleted)
+	var taskCount int
+	if err := store.db.GetContext(ctx, &taskCount, `SELECT COUNT(*) FROM tasks`); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 0 {
+		t.Errorf("expected 0 task rows, got %d", taskCount)
 	}
 }
 

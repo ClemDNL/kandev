@@ -508,6 +508,31 @@ func (s *Store) DeleteAllRuns(ctx context.Context, automationID string) error {
 	return err
 }
 
+// DeleteAllRunsAndTaskRows removes all run rows for an automation and their
+// associated task rows in one database transaction. Missing task rows are
+// ignored so stale run records remain removable.
+func (s *Store) DeleteAllRunsAndTaskRows(ctx context.Context, automationID string, taskIDs []string) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if len(taskIDs) > 0 {
+		query, args, err := sqlx.In(`DELETE FROM tasks WHERE id IN (?)`, taskIDs)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, tx.Rebind(query), args...); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM automation_runs WHERE automation_id = ?`, automationID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // DeleteAutomationsByWorkspace removes all automations (and their triggers/runs) for a workspace.
 // Used by e2e reset.
 func (s *Store) DeleteAutomationsByWorkspace(ctx context.Context, workspaceID string) (int, error) {

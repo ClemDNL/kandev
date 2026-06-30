@@ -12,6 +12,7 @@ import (
 	"github.com/kandev/kandev/internal/common/logger"
 	"github.com/kandev/kandev/internal/events"
 	"github.com/kandev/kandev/internal/events/bus"
+	taskmodels "github.com/kandev/kandev/internal/task/models"
 	taskrepo "github.com/kandev/kandev/internal/task/repository/sqlite"
 )
 
@@ -19,6 +20,15 @@ import (
 // Satisfied by *taskservice.Service; injected to avoid a cyclic import.
 type TaskDeleter interface {
 	DeleteTask(ctx context.Context, id string) error
+}
+
+type taskResourceCleaner interface {
+	CleanupTaskResources(ctx context.Context, taskID string, deleteEnvRow bool)
+}
+
+type taskDeletionEventer interface {
+	GetTasksForDeletion(ctx context.Context, taskIDs []string) ([]*taskmodels.Task, error)
+	PublishTaskDeleted(ctx context.Context, task *taskmodels.Task)
 }
 
 // Service coordinates automation operations.
@@ -197,39 +207,58 @@ func (s *Service) DeleteRun(ctx context.Context, runID string) error {
 	if err != nil {
 		return fmt.Errorf("get run: %w", err)
 	}
+	return s.deleteRun(ctx, run)
+}
+
+func (s *Service) deleteRun(ctx context.Context, run *AutomationRun) error {
 	if run != nil && run.TaskID != "" && s.taskDeleter != nil {
 		if delErr := s.taskDeleter.DeleteTask(ctx, run.TaskID); delErr != nil {
 			if !errors.Is(delErr, taskrepo.ErrTaskNotFound) {
 				return fmt.Errorf("delete task: %w", delErr)
 			}
 			s.logger.Debug("run task already gone, continuing delete",
-				zap.String("run_id", runID),
+				zap.String("run_id", run.ID),
 				zap.String("task_id", run.TaskID))
 		}
 	}
-	return s.store.DeleteRun(ctx, runID)
+	if run == nil {
+		return nil
+	}
+	return s.store.DeleteRun(ctx, run.ID)
 }
 
-// DeleteAllRuns removes every run for an automation, deleting each associated
-// task first. Task deletion is best-effort: not-found errors are ignored.
+// DeleteAllRuns removes every run for an automation and associated task rows in
+// one DB transaction. Runtime cleanup for deleted task resources runs after the
+// commit, matching task cascade cleanup semantics.
 func (s *Service) DeleteAllRuns(ctx context.Context, automationID string) error {
-	if s.taskDeleter != nil {
-		taskIDs, err := s.store.ListRunTaskIDs(ctx, automationID)
+	taskIDs, err := s.store.ListRunTaskIDs(ctx, automationID)
+	if err != nil {
+		return fmt.Errorf("list run task ids: %w", err)
+	}
+	if len(taskIDs) == 0 || s.taskDeleter == nil {
+		return s.store.DeleteAllRuns(ctx, automationID)
+	}
+	var deletedTasks []*taskmodels.Task
+	if eventer, ok := s.taskDeleter.(taskDeletionEventer); ok && len(taskIDs) > 0 {
+		deletedTasks, err = eventer.GetTasksForDeletion(ctx, taskIDs)
 		if err != nil {
-			return fmt.Errorf("list run task ids: %w", err)
-		}
-		for _, taskID := range taskIDs {
-			if delErr := s.taskDeleter.DeleteTask(ctx, taskID); delErr != nil {
-				if !errors.Is(delErr, taskrepo.ErrTaskNotFound) {
-					return fmt.Errorf("delete task %s: %w", taskID, delErr)
-				}
-				s.logger.Debug("run task already gone, skipping",
-					zap.String("automation_id", automationID),
-					zap.String("task_id", taskID))
-			}
+			return fmt.Errorf("load tasks for delete events: %w", err)
 		}
 	}
-	return s.store.DeleteAllRuns(ctx, automationID)
+	if err := s.store.DeleteAllRunsAndTaskRows(ctx, automationID, taskIDs); err != nil {
+		return fmt.Errorf("delete runs and tasks: %w", err)
+	}
+	if eventer, ok := s.taskDeleter.(taskDeletionEventer); ok {
+		for _, task := range deletedTasks {
+			eventer.PublishTaskDeleted(ctx, task)
+		}
+	}
+	if cleaner, ok := s.taskDeleter.(taskResourceCleaner); ok {
+		for _, taskID := range taskIDs {
+			cleaner.CleanupTaskResources(ctx, taskID, false)
+		}
+	}
+	return nil
 }
 
 // DeleteRunForWorkspace deletes a single run only when its parent automation
@@ -252,7 +281,7 @@ func (s *Service) DeleteRunForWorkspace(ctx context.Context, runID, workspaceID 
 	if a == nil || a.WorkspaceID != workspaceID {
 		return false, nil
 	}
-	return true, s.DeleteRun(ctx, runID)
+	return true, s.deleteRun(ctx, run)
 }
 
 // DeleteAllRunsForWorkspace deletes all runs for an automation only when it
