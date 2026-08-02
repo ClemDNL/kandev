@@ -1,7 +1,7 @@
 ---
 spec: docs/specs/agents/profile-disable.md
 created: 2026-08-01
-status: draft
+status: implemented
 ---
 
 # Implementation Plan: Disable an Agent Profile
