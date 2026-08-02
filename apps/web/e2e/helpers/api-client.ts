@@ -573,6 +573,7 @@ export class ApiClient {
       mode?: string;
       config_options?: Record<string, string>;
       cli_passthrough?: boolean;
+      enabled?: boolean;
       cli_flags?: Array<{ description: string; flag: string; enabled: boolean }>;
       command_prefix?: string;
       env_vars?: Array<{ key: string; value?: string; secret_id?: string }>;

@@ -43,14 +43,16 @@ export function useHandoffProfiles(taskId: string, enabled = true): HandoffProfi
   const { specs: authSpecs, loaded: authLoaded } = useRemoteAuthSpecs();
 
   return useMemo(() => {
-    return agentProfiles.map((profile) => {
-      const { label, agentName } = profileDisplayLabel(profile);
-      let disabled = false;
-      if (executorProfile && authLoaded) {
-        disabled = !isAgentConfiguredOnExecutor(profile, executorProfile, authSpecs);
-      }
-      return { id: profile.id, label, agentName, disabled };
-    });
+    return agentProfiles
+      .filter((profile) => profile.enabled !== false)
+      .map((profile) => {
+        const { label, agentName } = profileDisplayLabel(profile);
+        let disabled = false;
+        if (executorProfile && authLoaded) {
+          disabled = !isAgentConfiguredOnExecutor(profile, executorProfile, authSpecs);
+        }
+        return { id: profile.id, label, agentName, disabled };
+      });
   }, [agentProfiles, executorProfile, authSpecs, authLoaded]);
 }
 

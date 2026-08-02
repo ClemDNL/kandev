@@ -119,41 +119,45 @@ export function useBranchOptions(branchOptionsRaw: Branch[]) {
 
 export function useAgentProfileOptions(agentProfiles: AgentProfileOption[]): OptionItem[] {
   return useMemo(() => {
-    return agentProfiles.map((profile: AgentProfileOption) => {
-      const parts = profile.label.split(" \u2022 ");
-      const agentLabel = parts[0] ?? profile.label;
-      const profileLabel = parts[1] ?? "";
-      const isPassthrough = profile.cli_passthrough === true;
-      const warning = getCapabilityWarning(profile.capability_status, profile.capability_error);
-      return {
-        value: profile.id,
-        label: profile.label,
-        renderLabel: () => (
-          <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-            <span className="flex shrink-0 items-center gap-1.5">
-              <AgentLogo agentName={profile.agent_name} className="shrink-0" />
-              <span>{agentLabel}</span>
-              {warning && (
-                <warning.Icon className={`size-3.5 ${warning.color}`} title={warning.title} />
-              )}
+    // Disabled profiles stay in the store (existing sessions keep their
+    // labels) but are never offered as a choice for new work.
+    return agentProfiles
+      .filter((profile) => profile.enabled !== false)
+      .map((profile: AgentProfileOption) => {
+        const parts = profile.label.split(" \u2022 ");
+        const agentLabel = parts[0] ?? profile.label;
+        const profileLabel = parts[1] ?? "";
+        const isPassthrough = profile.cli_passthrough === true;
+        const warning = getCapabilityWarning(profile.capability_status, profile.capability_error);
+        return {
+          value: profile.id,
+          label: profile.label,
+          renderLabel: () => (
+            <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+              <span className="flex shrink-0 items-center gap-1.5">
+                <AgentLogo agentName={profile.agent_name} className="shrink-0" />
+                <span>{agentLabel}</span>
+                {warning && (
+                  <warning.Icon className={`size-3.5 ${warning.color}`} title={warning.title} />
+                )}
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {isPassthrough && (
+                  <IconTerminal2
+                    className="size-3.5 text-muted-foreground"
+                    title="CLI mode - your prompt will be auto-injected into the terminal"
+                  />
+                )}
+                {profileLabel ? (
+                  <ScrollOnOverflow className="rounded-full border border-border px-2 py-0.5 text-xs">
+                    {profileLabel}
+                  </ScrollOnOverflow>
+                ) : null}
+              </span>
             </span>
-            <span className="flex shrink-0 items-center gap-1.5">
-              {isPassthrough && (
-                <IconTerminal2
-                  className="size-3.5 text-muted-foreground"
-                  title="CLI mode - your prompt will be auto-injected into the terminal"
-                />
-              )}
-              {profileLabel ? (
-                <ScrollOnOverflow className="rounded-full border border-border px-2 py-0.5 text-xs">
-                  {profileLabel}
-                </ScrollOnOverflow>
-              ) : null}
-            </span>
-          </span>
-        ),
-      };
-    });
+          ),
+        };
+      });
   }, [agentProfiles]);
 }
 

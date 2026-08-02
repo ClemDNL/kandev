@@ -102,8 +102,12 @@ function useExecutorProfileCompat(
   );
   const { specs: authSpecs, loaded: authLoaded } = useRemoteAuthSpecs();
   const compatibleAgentProfiles = useMemo(() => {
-    if (!selectedExecutorProfile || !authLoaded) return agentProfiles;
-    return agentProfiles.filter((ap) =>
+    // Disabled profiles are never autopick candidates or options, even
+    // before the executor-compat filter runs (no executor selected / auth
+    // not loaded return the raw list from this memo).
+    const selectable = agentProfiles.filter((ap) => ap.enabled !== false);
+    if (!selectedExecutorProfile || !authLoaded) return selectable;
+    return selectable.filter((ap) =>
       isAgentConfiguredOnExecutor(ap, selectedExecutorProfile, authSpecs),
     );
   }, [agentProfiles, selectedExecutorProfile, authSpecs, authLoaded]);

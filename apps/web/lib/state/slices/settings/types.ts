@@ -52,6 +52,11 @@ export type AgentProfileOption = {
   agent_name: string;
   cli_passthrough: boolean;
   /**
+   * False hides the profile from task/session creation pickers. Existing
+   * sessions keep their labels and the profile stays editable in settings.
+   */
+  enabled?: boolean;
+  /**
    * Host utility probe status for the agent this profile belongs to.
    * Used by pickers and the settings sidebar to flag profiles whose agent
    * needs login or reinstallation.
@@ -63,7 +68,10 @@ export type AgentProfileOption = {
 /** Single source of truth for mapping an API Agent+Profile to a store AgentProfileOption. */
 export function toAgentProfileOption(
   agent: Pick<Agent, "id" | "name" | "capability_status" | "capability_error">,
-  profile: Pick<AgentProfile, "id" | "agentDisplayName" | "name"> & { cliPassthrough?: boolean },
+  profile: Pick<AgentProfile, "id" | "agentDisplayName" | "name"> & {
+    cliPassthrough?: boolean;
+    enabled?: boolean;
+  },
 ): AgentProfileOption {
   return {
     id: profile.id,
@@ -71,6 +79,7 @@ export function toAgentProfileOption(
     agent_id: agent.id,
     agent_name: agent.name,
     cli_passthrough: profile.cliPassthrough ?? false,
+    enabled: profile.enabled ?? true,
     capability_status: agent.capability_status,
     capability_error: agent.capability_error,
   };

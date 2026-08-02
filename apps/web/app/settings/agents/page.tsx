@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "@/components/routing/app-link";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -13,7 +12,6 @@ import {
   IconRefresh,
   IconTerminal2,
 } from "@tabler/icons-react";
-import { Badge } from "@kandev/ui/badge";
 import { Button } from "@kandev/ui/button";
 import { Card, CardContent } from "@kandev/ui/card";
 import { Separator } from "@kandev/ui/separator";
@@ -30,12 +28,13 @@ import type { AgentUpdateJob, AgentUpdatePreview, InstallJob } from "@/lib/api";
 import { useAgentDiscovery } from "@/hooks/domains/settings/use-agent-discovery";
 import { useAgentRuntimeUpdates } from "@/hooks/domains/settings/use-agent-runtime-updates";
 import { useAvailableAgents } from "@/hooks/domains/settings/use-available-agents";
-import { AgentLogo } from "@/components/agent-logo";
 import { AddTUIAgentDialog } from "@/components/settings/add-tui-agent-dialog";
 import { HostShellDialog } from "@/components/settings/host-shell-dialog";
 import { InstallAgentCard } from "@/components/settings/install-agent-card";
 import { InstalledAgentCard } from "@/components/settings/installed-agent-card";
 import { toAgentProfileOption } from "@/lib/state/slices/settings/types";
+import { ProfileListItem } from "@/app/settings/agents/profile-list-item";
+import { useProfileEnabledToggle } from "@/app/settings/agents/use-profile-enabled-toggle";
 import type {
   AgentDiscovery,
   Agent,
@@ -166,31 +165,6 @@ function ToolInstallCard({
         )}
       </CardContent>
     </Card>
-  );
-}
-
-type ProfileListItemProps = {
-  agent: Agent;
-  profile: AgentProfile;
-};
-
-function ProfileListItem({ agent, profile }: ProfileListItemProps) {
-  const profilePath = `/settings/agents/${encodeURIComponent(agent.name)}/profiles/${profile.id}`;
-  return (
-    <Link href={profilePath} className="block">
-      <Card className="hover:bg-accent transition-colors cursor-pointer">
-        <CardContent className="py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AgentLogo agentName={agent.name} className="shrink-0" />
-            <span className="text-sm font-medium">
-              {agent.profiles[0]?.agentDisplayName ?? agent.name}
-            </span>
-            {agent.supports_mcp && <Badge variant="secondary">MCP</Badge>}
-            <span className="text-sm text-muted-foreground">{profile.name}</span>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
   );
 }
 
@@ -386,9 +360,10 @@ function SuggestInstallSection({
 
 type AgentProfilesSectionProps = {
   savedAgents: Agent[];
+  onToggleEnabled: (profile: AgentProfile, enabled: boolean) => void;
 };
 
-function AgentProfilesSection({ savedAgents }: AgentProfilesSectionProps) {
+function AgentProfilesSection({ savedAgents, onToggleEnabled }: AgentProfilesSectionProps) {
   if (!savedAgents.some((agent: Agent) => agent.profiles.length > 0)) {
     return null;
   }
@@ -404,7 +379,12 @@ function AgentProfilesSection({ savedAgents }: AgentProfilesSectionProps) {
       <div className="space-y-2">
         {savedAgents.flatMap((agent: Agent) =>
           agent.profiles.map((profile: AgentProfile) => (
-            <ProfileListItem key={profile.id} agent={agent} profile={profile} />
+            <ProfileListItem
+              key={profile.id}
+              agent={agent}
+              profile={profile}
+              onToggleEnabled={onToggleEnabled}
+            />
           )),
         )}
       </div>
@@ -528,6 +508,11 @@ function useAgentPageState() {
 
   const { installJobs, handleInstall } = useInstallAgent(handleRescan);
   const { updateJobs, previewUpdate, startUpdate } = useAgentRuntimeUpdates();
+  const handleToggleProfileEnabled = useProfileEnabledToggle(
+    savedAgents,
+    setSettingsAgents,
+    setAgentProfiles,
+  );
 
   const handleCreateCustomTUI = async (data: {
     display_name: string;
@@ -570,6 +555,7 @@ function useAgentPageState() {
     updateJobs,
     previewUpdate,
     startUpdate,
+    handleToggleProfileEnabled,
   };
 }
 
@@ -594,6 +580,7 @@ export default function AgentsSettingsPage() {
     updateJobs,
     previewUpdate,
     startUpdate,
+    handleToggleProfileEnabled,
   } = useAgentPageState();
   const { copiedValue, copy } = useCopyCommand();
 
@@ -633,7 +620,10 @@ export default function AgentsSettingsPage() {
         onInstall={handleInstall}
       />
 
-      <AgentProfilesSection savedAgents={savedAgents} />
+      <AgentProfilesSection
+        savedAgents={savedAgents}
+        onToggleEnabled={handleToggleProfileEnabled}
+      />
 
       <AddTUIAgentDialog
         open={tuiDialogOpen}

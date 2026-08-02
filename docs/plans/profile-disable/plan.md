@@ -97,19 +97,19 @@ settings UI → E2E. Each layer is independently testable.
 
 Wave 1:
 
-- [ ] [task-01-backend-enabled-column](task-01-backend-enabled-column.md)
+- [x] [task-01-backend-enabled-column](task-01-backend-enabled-column.md)
 
 Wave 2:
 
-- [ ] [task-02-frontend-types-and-selection-filtering](task-02-frontend-types-and-selection-filtering.md)
+- [x] [task-02-frontend-types-and-selection-filtering](task-02-frontend-types-and-selection-filtering.md)
 
 Wave 3:
 
-- [ ] [task-03-settings-toggle-ui](task-03-settings-toggle-ui.md)
+- [x] [task-03-settings-toggle-ui](task-03-settings-toggle-ui.md)
 
 Wave 4:
 
-- [ ] [task-04-e2e](task-04-e2e.md)
+- [x] [task-04-e2e](task-04-e2e.md)
 
 ## Risks
 

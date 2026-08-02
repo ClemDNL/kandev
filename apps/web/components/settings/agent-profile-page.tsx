@@ -4,21 +4,17 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "@/components/routing/app-link";
 import { useParams } from "@/lib/routing/client-router";
 import { IconTrash } from "@tabler/icons-react";
-import { areCLIFlagsEqual } from "@/lib/cli-flags";
-import { areConfigOptionsEqual } from "@/lib/config-options";
 import { Badge } from "@kandev/ui/badge";
 import { Button } from "@kandev/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@kandev/ui/card";
 import { Separator } from "@kandev/ui/separator";
+import { Switch } from "@kandev/ui/switch";
 import { useToast } from "@/components/toast-provider";
 import { useSettingsSaveContributor } from "@/components/settings/settings-save-provider";
+import { isProfileDirty } from "@/components/settings/agent-profile-dirty";
 import { SettingsCard } from "@/components/settings/settings-card";
 import { ProfileFormFields, type ProfileFormData } from "@/components/settings/profile-form-fields";
-import {
-  arePermissionsDirty,
-  permissionsToProfilePatch,
-  profilePermissionValues,
-} from "@/lib/agent-permissions";
+import { permissionsToProfilePatch, profilePermissionValues } from "@/lib/agent-permissions";
 import { toAgentProfilePatch } from "@/app/settings/agents/[agentId]/agent-save-helpers";
 import { deleteAgentProfileAction, updateAgentProfileAction } from "@/app/actions/agents";
 import {
@@ -66,21 +62,40 @@ type ProfileEditorHeaderProps = {
   agentName: string;
   agentDisplayName: string;
   savedProfileName: string;
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
 };
 
 function ProfileEditorHeader({
   agentName,
   agentDisplayName,
   savedProfileName,
+  enabled,
+  onEnabledChange,
 }: ProfileEditorHeaderProps) {
   return (
-    <div className="flex items-start justify-between">
+    <div className="flex items-start justify-between gap-4">
       <div>
         <h2 className="text-2xl font-bold flex items-center gap-2">
           <AgentLogo agentName={agentName} size={28} className="shrink-0" />
           {agentDisplayName} • {savedProfileName}
         </h2>
         <p className="text-sm text-muted-foreground mt-1">{agentDisplayName} profile settings</p>
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <div className="text-right">
+          <p className="text-sm font-medium">Enabled</p>
+          <p className="text-xs text-muted-foreground max-w-56">
+            Disabled profiles keep serving existing sessions but are not offered when creating new
+            tasks or agents.
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={onEnabledChange}
+          data-testid="profile-enabled-toggle"
+          aria-label={enabled ? "Disable profile" : "Enable profile"}
+        />
       </div>
     </div>
   );
@@ -210,16 +225,7 @@ function useProfileEditorState(
   const [saveStatus, setSaveStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
 
   const isDirty = useMemo(
-    () =>
-      draft.name !== savedProfile.name ||
-      draft.model !== savedProfile.model ||
-      (draft.mode ?? "") !== (savedProfile.mode ?? "") ||
-      !areConfigOptionsEqual(draft.configOptions, savedProfile.configOptions) ||
-      arePermissionsDirty(draft, savedProfile, permissionSettings) ||
-      draft.cliPassthrough !== savedProfile.cliPassthrough ||
-      !areCLIFlagsEqual(draft.cliFlags ?? [], savedProfile.cliFlags ?? []) ||
-      (draft.commandPrefix ?? "") !== (savedProfile.commandPrefix ?? "") ||
-      !areEnvVarsEqual(draft.envVars, savedProfile.envVars),
+    () => isProfileDirty(draft, savedProfile, permissionSettings),
     [draft, savedProfile, permissionSettings],
   );
 
@@ -273,6 +279,7 @@ function useProfileSave({
         config_options: draft.configOptions ?? {},
         ...permissionsToProfilePatch(draft),
         cli_passthrough: draft.cliPassthrough,
+        enabled: draft.enabled ?? true,
         cli_flags: draft.cliFlags,
         command_prefix: draft.commandPrefix ?? "",
         env_vars: draft.envVars ?? [],
@@ -558,6 +565,8 @@ function ProfileEditor({
         agentName={agent.name}
         agentDisplayName={profile.agentDisplayName ?? ""}
         savedProfileName={savedProfile.name}
+        enabled={draft.enabled ?? true}
+        onEnabledChange={(next) => updateDraft({ enabled: next })}
       />
 
       <Separator />

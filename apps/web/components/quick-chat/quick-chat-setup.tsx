@@ -197,11 +197,18 @@ export function QuickChatSetup({
       state.workspaces.items.find((workspace) => workspace.id === workspaceId)
         ?.default_agent_profile_id ?? "",
   );
-  const [agentProfileId, setAgentProfileId] = useState(defaultAgentId);
+  // A workspace default pointing at a disabled profile must not be applied —
+  // the selector would otherwise auto-start a new chat with a profile the
+  // user explicitly took out of rotation.
+  const selectableDefault =
+    defaultAgentId && agentProfiles.some((p) => p.id === defaultAgentId && p.enabled !== false)
+      ? defaultAgentId
+      : "";
+  const [agentProfileId, setAgentProfileId] = useState(selectableDefault);
   useEffect(() => {
-    if (!defaultAgentId) return;
-    setAgentProfileId((current) => current || defaultAgentId);
-  }, [defaultAgentId]);
+    if (!selectableDefault) return;
+    setAgentProfileId((current) => current || selectableDefault);
+  }, [selectableDefault]);
   const { repositories, isLoading } = useRepositories(workspaceId, true);
   const repoState = useRepositoriesState();
   const isStarting = pendingAgentId !== null;

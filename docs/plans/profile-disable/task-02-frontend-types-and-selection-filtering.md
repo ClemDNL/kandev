@@ -1,7 +1,7 @@
 ---
 id: "02-frontend-types-and-selection-filtering"
 title: "Frontend types and selection filtering"
-status: pending
+status: done
 wave: 2
 depends_on: ["01-backend-enabled-column"]
 plan: "plan.md"

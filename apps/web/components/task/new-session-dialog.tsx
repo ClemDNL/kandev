@@ -81,10 +81,14 @@ function useNewSessionDialogState(taskId: string) {
   });
 
   const sessionProfileId = currentSession?.agent_profile_id ?? "";
-  const profileIsValid = agentProfiles.some((p: { id: string }) => p.id === sessionProfileId);
+  // The default for a NEW session must be selectable: a current session
+  // that uses a now-disabled profile still runs (no effect on existing
+  // sessions), but the dialog falls back to the first enabled profile.
+  const selectableProfiles = agentProfiles.filter((p) => p.enabled !== false);
+  const profileIsValid = selectableProfiles.some((p: { id: string }) => p.id === sessionProfileId);
   const effectiveDefaultProfileId: string = profileIsValid
     ? sessionProfileId
-    : (agentProfiles[0]?.id ?? "");
+    : (selectableProfiles[0]?.id ?? "");
 
   return {
     taskTitle,

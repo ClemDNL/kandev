@@ -1,7 +1,7 @@
 ---
 id: "03-settings-toggle-ui"
 title: "Settings toggle UI"
-status: pending
+status: done
 wave: 3
 depends_on: ["02-frontend-types-and-selection-filtering"]
 plan: "plan.md"

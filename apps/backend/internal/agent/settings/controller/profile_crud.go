@@ -74,6 +74,7 @@ func (c *Controller) CreateProfile(ctx context.Context, req CreateProfileRequest
 		AllowIndexing:    req.AllowIndexing,
 		AutoApprove:      req.AutoApprove,
 		CLIPassthrough:   req.CLIPassthrough,
+		Enabled:          true,
 		CLIFlags:         cliFlags,
 		EnvVars:          envVarsFromDTO(req.EnvVars),
 		CommandPrefix:    strings.TrimSpace(req.CommandPrefix),
@@ -134,6 +135,9 @@ type UpdateProfileRequest struct {
 	AllowIndexing  *bool
 	AutoApprove    *bool
 	CLIPassthrough *bool
+	// Enabled replaces the value when non-nil. Nil means "leave unchanged" —
+	// the UI always sends the desired value on save.
+	Enabled *bool
 	// CLIFlags replaces the entire list when non-nil. Nil means "leave
 	// unchanged" — the UI always sends the full desired list on save.
 	CLIFlags *[]dto.CLIFlagDTO
@@ -174,6 +178,9 @@ func (c *Controller) UpdateProfile(ctx context.Context, req UpdateProfileRequest
 	}
 	if req.CLIPassthrough != nil {
 		profile.CLIPassthrough = *req.CLIPassthrough
+	}
+	if req.Enabled != nil {
+		profile.Enabled = *req.Enabled
 	}
 	if req.CLIFlags != nil {
 		if err := validateCLIFlagDTOs(*req.CLIFlags); err != nil {
@@ -432,6 +439,7 @@ func toProfileDTO(profile *models.AgentProfile) dto.AgentProfileDTO {
 		CLIFlags:         cliFlagsToDTO(profile.CLIFlags),
 		EnvVars:          envVarsToDTO(profile.EnvVars),
 		CLIPassthrough:   profile.CLIPassthrough,
+		Enabled:          profile.Enabled,
 		CommandPrefix:    profile.CommandPrefix,
 		UserModified:     profile.UserModified,
 		WorkspaceID:      profile.WorkspaceID,

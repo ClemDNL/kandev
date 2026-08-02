@@ -3,21 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockToast = vi.fn();
 const mockSummarize = vi.fn();
+let mockAgentSelectorValue: string | undefined;
+
+const BASE_PROFILE = {
+  id: "profile-1",
+  label: "Profile 1",
+  agent_name: "agent-1",
+  agent_id: "agent-id-1",
+  cli_passthrough: false,
+  enabled: true,
+};
 
 const mockState = {
   kanban: {
     tasks: [{ id: "task-1", title: "Task title" }],
   },
   agentProfiles: {
-    items: [
-      {
-        id: "profile-1",
-        label: "Profile 1",
-        agent_name: "agent-1",
-        agent_id: "agent-id-1",
-        cli_passthrough: false,
-      },
-    ],
+    items: [BASE_PROFILE],
   },
   tasks: {
     activeSessionId: "session-1",
@@ -75,7 +77,10 @@ vi.mock("@/lib/state/dockview-panel-actions", () => ({
 }));
 
 vi.mock("@/components/task-create-dialog-selectors", () => ({
-  AgentSelector: () => null,
+  AgentSelector: (props: { value?: string }) => {
+    mockAgentSelectorValue = props.value;
+    return null;
+  },
 }));
 
 vi.mock("@/components/task-create-dialog-options", () => ({
@@ -153,6 +158,8 @@ import { NewSessionDialog } from "./new-session-dialog";
 describe("NewSessionDialog", () => {
   afterEach(() => {
     cleanup();
+    mockState.agentProfiles.items = [BASE_PROFILE];
+    mockAgentSelectorValue = undefined;
   });
 
   beforeEach(() => {
@@ -190,5 +197,14 @@ describe("NewSessionDialog", () => {
           .value,
       ).toBe("summary text"),
     );
+  });
+
+  it("defaults to the first enabled profile when the session profile is disabled", () => {
+    mockState.agentProfiles.items = [
+      { ...BASE_PROFILE, enabled: false },
+      { ...BASE_PROFILE, id: "profile-2", label: "Profile 2" },
+    ];
+    render(<NewSessionDialog open={true} onOpenChange={vi.fn()} taskId="task-1" />);
+    expect(mockAgentSelectorValue).toBe("profile-2");
   });
 });

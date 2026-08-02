@@ -1,7 +1,7 @@
 ---
 id: "01-backend-enabled-column"
 title: "Backend enabled column for agent profiles"
-status: pending
+status: done
 wave: 1
 depends_on: []
 plan: "plan.md"
