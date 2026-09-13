@@ -278,7 +278,13 @@ func (m *Manager) claimPromptCompletion(
 	claim.locked = true
 	claimed := false
 	err := m.executionStore.WithLock(execution.ID, func(current *AgentExecution) {
-		if current != execution || current.promptGeneration != event.PromptGeneration {
+		if current != execution {
+			return
+		}
+		if current.recoveredPromptGenerationPending.CompareAndSwap(true, false) {
+			current.promptGeneration = event.PromptGeneration
+		}
+		if current.promptGeneration != event.PromptGeneration {
 			return
 		}
 		if current.promptCompletionGeneration == event.PromptGeneration {
@@ -853,6 +859,15 @@ func (m *Manager) handleAgentEventWithAttempt(
 	attemptID string,
 ) {
 	event.AttemptID = attemptID
+	// A terminal event that was already applied from a retained turn outcome
+	// can be redelivered when the live stream attaches. Drop that exact event
+	// instead of applying the completion a second time.
+	if execution.isRecoveryDuplicateEvent(&event) {
+		m.logger.Debug("dropping live event: already applied via retained turn outcome",
+			zap.String("execution_id", execution.ID),
+			zap.Int64("control_turn_id", event.ControlTurnID))
+		return
+	}
 	if m.handleMCPAttachmentEvent(execution, &event, attemptID) {
 		return
 	}

@@ -154,8 +154,32 @@ func (s *Server) handleAgentStreamWS(c *gin.Context) {
 	s.logger.Info("agent stream WebSocket connected")
 	streamID := uuid.NewString()
 
+	// This is the agentctl-local "instance is attached" signal
+	// (AC-EXECUTORS-SURVIVAL-001.5/.6): the permission-request notification
+	// site reads it to decide whether to auto-cancel on a five-second
+	// timeout (attached) or park (detached) when its channel is full.
+	s.procMgr.MarkAttached()
+	defer s.procMgr.MarkDetached()
+
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+
+	// AC-EXECUTORS-CONTROL-OWNERSHIP-002.2: terminate this stream if the
+	// control server's credential rotates while it is open, so a prior
+	// holder cannot keep consuming an instance's events past the moment its
+	// credential is superseded. The channel comes from instanceAuth's
+	// context value, captured atomically with the request's own accept
+	// check -- not a fresh Invalidated() call here, which would be a second,
+	// independent lock acquisition racing a concurrent rotation.
+	if invalidated := credentialInvalidatedFromContext(c); invalidated != nil {
+		go func() {
+			select {
+			case <-invalidated:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 
 	// Use a mutex for writing to the WebSocket
 	var writeMu sync.Mutex
@@ -657,6 +681,11 @@ func (s *Server) handleWSPrompt(ctx context.Context, msg *ws.Message) *ws.Messag
 		resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeBadRequest, "no active session - call new_session first", nil)
 		return resp
 	}
+
+	// The retained slot belongs to the previous terminal turn. Clear it before
+	// accepting this prompt so recovery cannot replay an old completion as the
+	// result of the new turn.
+	s.procMgr.ClearTurnOutcome(req.PromptGeneration)
 
 	// Cancel any pending permissions so the agent isn't blocked waiting for
 	// the user to approve a previous tool call while processing the new prompt.

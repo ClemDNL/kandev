@@ -35,6 +35,7 @@ import {
   isCurrentRequest,
   type SessionRequestIdentity,
 } from "./use-session-resumption-request-guard";
+import { resolveRequestErrorMessage } from "@/lib/services/session-recovery-service";
 import { useAppStore, useAppStoreApi } from "@/components/state-provider";
 import {
   sessionId as toSessionId,
@@ -658,7 +659,7 @@ function handleManualResumeError(
   if (!canContinue()) return false;
   setters.setResumptionState("error");
   setters.setRecoveryFailure?.(null);
-  setters.setError(error instanceof Error ? error.message : t("common:unknownError"));
+  setters.setError(resolveRequestErrorMessage(error, t));
   return false;
 }
 
