@@ -59,6 +59,19 @@ type taskTitleSessionClaimer interface {
 	ClaimTaskTitleSession(ctx context.Context, taskID, sessionID string) (bool, error)
 }
 
+type correlatedSessionRecoveryProvider interface {
+	HasActiveSessionRecoveryForFailure(ctx context.Context, taskID, sessionID string, failure error) bool
+}
+
+type resumeAndPromptOrchestrator interface {
+	ResumeTaskSessionAndPrompt(
+		ctx context.Context,
+		taskID, sessionID, prompt, model string,
+		planMode bool,
+		attachments []v1.MessageAttachment,
+	) (*orchestrator.PromptResult, error)
+}
+
 // AtomicQueuedPromptCoordinator exposes admission limits and committed prompt delivery.
 type AtomicQueuedPromptCoordinator interface {
 	MaxQueuedPromptsPerSession() int
@@ -1457,7 +1470,8 @@ func (h *MessageHandlers) forwardMessageAsPrompt(
 		// The agent failure path (handleAgentFailed) already sets the session to FAILED
 		// with the error_message, which the UI displays via agent-status.
 		if !isAgentReportedError(err) &&
-			!h.queuePromptIfRuntimeUnavailable(ctx, taskID, sessionID, content, model, planMode, attachments, err) {
+			!h.queuePromptIfRuntimeUnavailable(ctx, taskID, sessionID, content, model, planMode, attachments, err) &&
+			!isPromptErrorOwnedByRecovery(err) {
 			h.createPromptErrorMessage(ctx, taskID, sessionID, err)
 		}
 	}
@@ -1523,6 +1537,17 @@ func isAgentReportedError(err error) bool {
 	return errors.Is(err, lifecycle.ErrAgentReported)
 }
 
+var errPromptRecoveryCardOwnsFailure = errors.New("session recovery owns prompt failure")
+
+func isPromptErrorOwnedByRecovery(err error) bool {
+	return errors.Is(err, orchestrator.ErrResumeAttemptCancelled) || errors.Is(err, errPromptRecoveryCardOwnsFailure)
+}
+
+func (h *MessageHandlers) hasActiveSessionRecovery(ctx context.Context, taskID, sessionID string, failure error) bool {
+	provider, ok := h.orchestrator.(correlatedSessionRecoveryProvider)
+	return ok && provider.HasActiveSessionRecoveryForFailure(ctx, taskID, sessionID, failure)
+}
+
 // isTimeoutError reports whether err looks like a timeout. Used by
 // createPromptErrorMessage to render the "Request timed out…" UX hint.
 //
@@ -1566,14 +1591,11 @@ func isTimeoutError(err error) bool {
 // runs, so retrying here cannot double-send a prompt the agent already
 // accepted.
 //
-// ResumeTaskSession and waitForSessionReady failures return origErr: neither
-// step ever reaches PromptTask, so the original pre-dispatch error is still
-// the only meaningful signal. Once the retry's own PromptTask call runs,
-// though, that call IS a real dispatch attempt — its error is authoritative
-// and takes over from origErr, so the caller's isAgentReportedError check
-// still fires correctly (e.g. the retry failing with a wrapped
-// lifecycle.ErrAgentReported must suppress createPromptErrorMessage, not get
-// masked by the unrelated original timeout).
+// The compound operation returns its concrete resume/readiness failure before
+// prompt admission, preserving that cause instead of masking it with origErr.
+// Once provider admission starts, the retry's prompt error is authoritative,
+// so the caller's isAgentReportedError check still handles a wrapped
+// lifecycle.ErrAgentReported without creating a duplicate message.
 func (h *MessageHandlers) handlePromptWithResume(
 	ctx context.Context,
 	taskID, sessionID, content, model string,
@@ -1585,31 +1607,35 @@ func (h *MessageHandlers) handlePromptWithResume(
 		!errors.Is(origErr, orchestrator.ErrAgentNotReadyForPrompt) {
 		return origErr
 	}
-	if resumeErr := h.orchestrator.ResumeTaskSession(ctx, taskID, sessionID); resumeErr != nil {
-		h.logger.Warn("failed to resume task session for prompt",
-			zap.String("task_id", taskID),
-			zap.String("session_id", sessionID),
-			zap.Error(resumeErr))
-		return origErr
+	if runner, ok := h.orchestrator.(resumeAndPromptOrchestrator); ok {
+		if _, retryErr := runner.ResumeTaskSessionAndPrompt(
+			ctx, taskID, sessionID, content, model, planMode, attachments,
+		); retryErr != nil {
+			h.logger.Warn("resume and prompt retry failed",
+				zap.String("task_id", taskID),
+				zap.String("session_id", sessionID),
+				zap.Error(retryErr))
+			if errors.Is(retryErr, orchestrator.ErrResumeAttemptCancelled) ||
+				h.hasActiveSessionRecovery(ctx, taskID, sessionID, retryErr) {
+				// Preserve the concrete resume/readiness/provider failure below the
+				// suppression sentinel. Queueing and diagnostics still need to see
+				// ErrSessionRuntimeUnavailable and recovery correlation must retain
+				// the attempt identity carried by retryErr.
+				return fmt.Errorf("%w: %w", errPromptRecoveryCardOwnsFailure, retryErr)
+			}
+			return retryErr
+		}
+		return nil
 	}
-	// Wait for the agent to become ready after resume.
-	// ResumeTaskSession starts the agent asynchronously, so we poll
-	// the session state until it transitions to a promptable state.
-	if waitErr := h.waitForSessionReady(ctx, sessionID); waitErr != nil {
-		h.logger.Warn("session did not become ready after resume",
-			zap.String("task_id", taskID),
-			zap.String("session_id", sessionID),
-			zap.Error(waitErr))
-		return origErr
-	}
-	if _, err := h.orchestrator.PromptTask(ctx, taskID, sessionID, content, model, planMode, attachments, false); err != nil {
-		h.logger.Warn("retry prompt failed after resume",
-			zap.String("task_id", taskID),
-			zap.String("session_id", sessionID),
-			zap.Error(err))
-		return err
-	}
-	return nil
+
+	// A split ResumeTaskSession → wait → PromptTask sequence cannot preserve
+	// recovery ownership across cancellation. The production adapter implements
+	// the compound operation above; an older adapter must fail closed instead of
+	// dispatching the prompt without an attempt identity.
+	h.logger.Warn("session recovery retry is unavailable without compound ownership",
+		zap.String("task_id", taskID),
+		zap.String("session_id", sessionID))
+	return origErr
 }
 
 // createPromptErrorMessage creates an agent error message visible to the user when
