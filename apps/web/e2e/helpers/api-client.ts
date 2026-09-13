@@ -2563,6 +2563,7 @@ export class ApiClient {
     queued_for_step_id?: string;
     priority?: TaskPriority;
     parent_id?: string;
+    position?: number;
     metadata?: Record<string, unknown> | null;
     repositories?: Array<{
       id: string;
