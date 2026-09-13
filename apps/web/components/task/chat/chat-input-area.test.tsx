@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { planCommentRecovery } from "@/lib/plan-comment-recovery";
 
 const toastMock = vi.fn();
 const handleSendMessageMock = vi.fn();
@@ -175,7 +176,15 @@ function panelState(overrides = {}) {
     clearEphemeral: vi.fn(),
     addContextFile: vi.fn(),
     planModeEnabled: false,
-    planCommentMigration: { status: "complete", isReady: true, isBlocking: false, retry: vi.fn() },
+    planCommentMigration: {
+      status: "complete",
+      pendingCount: 0,
+      failure: null,
+      needsAttention: false,
+      isReady: true,
+      isBlocking: false,
+      retry: vi.fn(),
+    },
     ...overrides,
   } as never;
 }
@@ -381,31 +390,61 @@ describe("useSubmitHandler plan mode", () => {
 });
 
 describe("useSubmitHandler task plan comments", () => {
-  it("blocks delivery while legacy comments still need migration", async () => {
-    const { result } = renderHook(() =>
-      useSubmitHandler(
-        panelState({
-          planCommentMigration: {
-            status: "failed",
-            isReady: false,
-            isBlocking: true,
-            retry: vi.fn(),
-          },
-        }),
-      ),
-    );
+  it.each(["idle", "retrying", "failed"] as const)(
+    "accepts plain Send with no identified drafts during %s recovery",
+    async (status) => {
+      const { result } = renderHook(() =>
+        useSubmitHandler(
+          panelState({
+            planCommentMigration: {
+              ...planCommentRecovery({ status, pendingCount: 0, failure: "transient" }),
+              retry: vi.fn(),
+            },
+          }),
+        ),
+      );
+      await act(async () => {
+        await expect(result.current.handleSubmit({ message: "Send my message" })).resolves.toBe(
+          true,
+        );
+      });
+      expect(handleSendMessageMock).toHaveBeenCalledWith({ message: "Send my message" });
+      expect(toastMock).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["transient", "conflict", "rejected"] as const)(
+    "preserves blocked delivery without promising retries for %s recovery",
+    async (failure) => {
+      const { result } = renderHook(() =>
+        useSubmitHandler(
+          panelState({
+            planCommentMigration: {
+              status: "failed",
+              pendingCount: 1,
+              failure,
+              needsAttention: true,
+              isReady: false,
+              isBlocking: true,
+              retry: vi.fn(),
+            },
+          }),
+        ),
+      );
 
-    await act(async () => {
-      await expect(result.current.handleSubmit({ message: "Keep my draft" })).resolves.toBe(false);
-    });
+      await act(async () => {
+        await expect(result.current.handleSubmit({ message: "Keep my draft" })).resolves.toBe(
+          false,
+        );
+      });
 
-    expect(handleSendMessageMock).not.toHaveBeenCalled();
-    expect(toastMock).toHaveBeenCalledWith({
-      title: "Message not sent",
-      description: "Saved plan comments are still being restored. Retry before sending.",
-      variant: "error",
-    });
-  });
+      expect(handleSendMessageMock).not.toHaveBeenCalled();
+      expect(toastMock).toHaveBeenCalledWith({
+        title: "Message not sent",
+        description: "Saved plan comments are still being restored. Your message is kept.",
+        variant: "error",
+      });
+    },
+  );
 
   it("submits displayed IDs and versions without clearing the shared snapshot locally", async () => {
     const clearSessionPlanComments = vi.fn();
@@ -418,7 +457,16 @@ describe("useSubmitHandler task plan comments", () => {
       selectedText: "Large step",
     };
     const { result } = renderHook(() =>
-      useSubmitHandler(panelState({ planComments: [comment], clearSessionPlanComments })),
+      useSubmitHandler(
+        panelState({
+          planComments: [comment],
+          clearSessionPlanComments,
+          planCommentMigration: {
+            ...planCommentRecovery({ status: "failed", pendingCount: 0, failure: "transient" }),
+            retry: vi.fn(),
+          },
+        }),
+      ),
     );
 
     await act(async () => {
