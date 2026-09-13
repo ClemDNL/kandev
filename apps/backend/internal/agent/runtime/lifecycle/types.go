@@ -157,11 +157,17 @@ type AgentExecution struct {
 	isResumedSession bool
 
 	// Buffers for accumulating agent response during a prompt
-	messageBuffer  strings.Builder
-	thinkingBuffer strings.Builder
-	messageMu      sync.Mutex
-	streamMu       sync.Mutex
-	stream         *streamCoalescer
+	messageBuffer strings.Builder
+	// messageBufferDiagnostic is the ProviderDiagnosticCandidate value of the
+	// chunk(s) currently held in messageBuffer (legacy no-protocol-ID path).
+	// A chunk whose marker differs from this flag forces an immediate flush of
+	// the buffered segment first, so a diagnostic chunk's marker is never
+	// merged away by concatenation with ordinary output.
+	messageBufferDiagnostic bool
+	thinkingBuffer          strings.Builder
+	messageMu               sync.Mutex
+	streamMu                sync.Mutex
+	stream                  *streamCoalescer
 
 	// Legacy streaming message tracking for agents that omit protocol message IDs.
 	// These are set when we create a streaming message and cleared on tool_call/complete.
@@ -239,6 +245,12 @@ type AgentExecution struct {
 	// produced a single frame for this prompt" from "it worked, then paused" —
 	// both cases otherwise bump the same lastActivityAt timestamp.
 	agentEventSincePrompt bool
+	// providerDiagnosticCandidate and providerDiagnosticText retain the
+	// sanitized marked diagnostic for the terminal evidence snapshot. A marked
+	// diagnostic does not count as ordinary output, but its text is needed to
+	// correlate a failure when stream and failure events are delivered out of order.
+	providerDiagnosticCandidate bool
+	providerDiagnosticText      string
 	// promptActivityEpoch changes when a prompt is armed or a genuine agent
 	// event arrives. Stall consumers use it to reject a snapshot that became
 	// stale while the event was crossing the bus.
@@ -384,6 +396,8 @@ func (e *AgentExecution) armPromptActivity() {
 	e.lastActivityAtMu.Lock()
 	e.lastActivityAt = time.Now()
 	e.agentEventSincePrompt = false
+	e.providerDiagnosticCandidate = false
+	e.providerDiagnosticText = ""
 	e.promptActivityEpoch++
 	e.lastActivityAtMu.Unlock()
 }
@@ -410,9 +424,11 @@ func (e *AgentExecution) promptAttemptEvidenceSnapshot() PromptAttemptEvidence {
 	e.lastActivityAtMu.Lock()
 	defer e.lastActivityAtMu.Unlock()
 	return PromptAttemptEvidence{
-		EvidenceKnown:  true,
-		OutputObserved: e.agentEventSincePrompt,
-		EffectObserved: e.agentEventSincePrompt,
+		EvidenceKnown:               true,
+		OutputObserved:              e.agentEventSincePrompt,
+		EffectObserved:              e.agentEventSincePrompt,
+		ProviderDiagnosticCandidate: e.providerDiagnosticCandidate,
+		ProviderDiagnosticText:      e.providerDiagnosticText,
 	}
 }
 
