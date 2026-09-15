@@ -1032,22 +1032,26 @@ func startGatewayAndServe(
 	// Per-instance servers enforce the same single rotating credential as
 	// the control server -- see config.AgentConfig's field doc.
 	hostUtilityMgr.SetAuthToken(cfg.Agent.StandaloneAuthToken)
-	hostUtilityMgr.SetProfileResolver(profilebinding.New(repos.AgentSettings, func(agentID string) bool {
+	pluginProfileResolver := profilebinding.New(repos.AgentSettings, func(agentID string) bool {
 		_, ok := agentRegistry.GetInferenceAgent(agentID)
 		return ok
-	}))
+	})
+	hostUtilityMgr.SetProfileResolver(pluginProfileResolver)
 	hostUtilityMgr.SetManagedRuntimeSelectionStore(services.ManagedRuntimeSelections)
 	// Wire the host utility manager into the settings controller so
 	// /api/v1/agent-models/:agentName reads live capability data.
 	agentSettingsController.SetHostUtility(hostUtilityMgr)
 	profileReconciler := agentsettingscontroller.NewProfileReconciler(hostUtilityMgr, agentRegistry, repos.AgentSettings, log)
 
-	// Wire Host.InvokeUtilityAgent (ADR 0048): plugins delegate one-shot LLM
-	// calls to the utility agent selected in each plugin's configuration and
-	// runs them through the sessionless host-utility tier, at the first point
-	// where hostUtilityMgr is live.
-	if services.Plugins != nil && services.Utility != nil {
-		services.Plugins.SetUtilityAgent(pluginsUtilityAgentAdapter{svc: services.Utility, userSvc: services.User}, pluginsHostUtilityAdapter{mgr: hostUtilityMgr})
+	// Wire Host.InvokeUtilityAgent at the first point where the sessionless
+	// host-utility tier is live. The host reads the platform default from user
+	// settings; plugins provide any per-call override explicitly.
+	if services.Plugins != nil && services.User != nil {
+		services.Plugins.SetUtilityAgent(
+			pluginsDefaultUtilityProfileAdapter{source: services.User},
+			pluginsAgentProfileAdapter{resolver: pluginProfileResolver},
+			pluginsHostUtilityAdapter{mgr: hostUtilityMgr},
+		)
 	}
 
 	bootstrap := ctx.Value(bootstrapContextKey{}).(*bootstrapRuntime)
