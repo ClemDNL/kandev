@@ -825,7 +825,7 @@ func scenarioClarificationMarkdown(e *emitter) {
 	fixedDelay(100)
 	e.text("Let me ask you a formatted question about project storage.")
 
-	result, err := callMCPTool("kandev", "ask_user_question_kandev", clarificationMarkdownQuestionArgs())
+	result, err := e.callMCPTool("kandev", "ask_user_question_kandev", clarificationMarkdownQuestionArgs())
 	if err != nil {
 		e.text(fmt.Sprintf("Question failed: %s", err))
 		return

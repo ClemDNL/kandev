@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -12,8 +13,9 @@ import (
 )
 
 var (
-	mcpClients   = map[string]*mcpclient.Client{}
-	mcpClientsMu sync.Mutex
+	mcpClients       = map[string]*mcpclient.Client{}
+	mcpClientCancels = map[string]context.CancelFunc{}
+	mcpClientsMu     sync.Mutex
 )
 
 // mcpSSEProtocolVersion keeps the mock agent on the legacy SSE protocol.
@@ -21,14 +23,19 @@ const mcpSSEProtocolVersion = mcp.ProtocolVersion20241105
 
 // getMCPClient returns (or creates) an initialized MCP client for the named server.
 func getMCPClient(serverName string) (*mcpclient.Client, error) {
-	return getMCPClientForServers(serverName, nil)
+	return getMCPClientCtx(context.Background(), serverName)
 }
 
-// getMCPClientForServers returns an initialized client for a server definition
-// supplied by the current ACP session. The mock agent can serve multiple ACP
-// sessions at the same time. Their Kandev SSE URLs contain session-specific
-// routing state, so the cache key must include the endpoint URL.
-func getMCPClientForServers(serverName string, sessionServers map[string]mcpServerDef) (*mcpclient.Client, error) {
+// getMCPClientCtx is the global-server variant used by catalog priming and
+// command-line scenarios.
+func getMCPClientCtx(ctx context.Context, serverName string) (*mcpclient.Client, error) {
+	return getMCPClientForServersCtx(ctx, serverName, nil)
+}
+
+func getMCPClientForServersCtx(ctx context.Context, serverName string, sessionServers map[string]mcpServerDef) (*mcpclient.Client, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	mcpClientsMu.Lock()
 	defer mcpClientsMu.Unlock()
 
@@ -49,8 +56,31 @@ func getMCPClientForServers(serverName string, sessionServers map[string]mcpServ
 		return nil, fmt.Errorf("create SSE client for %s: %w", serverName, err)
 	}
 
-	ctx := context.Background()
-	if err := c.Start(ctx); err != nil {
+	// Start owns the lifetime of the SSE stream. Keep it independent from the
+	// request context so a successful catalog probe remains usable by later
+	// prompts after ACP returns from NewSession or LoadSession, while still
+	// allowing the caller's probe deadline to cancel startup.
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- c.Start(startCtx)
+	}()
+	select {
+	case err := <-startErr:
+		if err != nil {
+			cancelStart()
+			return nil, fmt.Errorf("start MCP client %s: %w", serverName, err)
+		}
+	case <-ctx.Done():
+		cancelStart()
+		<-startErr
+		_ = c.Close()
+		return nil, fmt.Errorf("start MCP client %s: %w", serverName, ctx.Err())
+	}
+
+	if err := ctx.Err(); err != nil {
+		cancelStart()
+		_ = c.Close()
 		return nil, fmt.Errorf("start MCP client %s: %w", serverName, err)
 	}
 
@@ -62,16 +92,51 @@ func getMCPClientForServers(serverName string, sessionServers map[string]mcpServ
 	}
 
 	if _, err := c.Initialize(ctx, initReq); err != nil {
+		cancelStart()
 		_ = c.Close()
 		return nil, fmt.Errorf("initialize MCP client %s: %w", serverName, err)
 	}
 	if _, err := c.ListTools(ctx, mcp.ListToolsRequest{}); err != nil {
+		cancelStart()
 		_ = c.Close()
 		return nil, fmt.Errorf("list MCP tools %s: %w", serverName, err)
 	}
 
+	if mcpClients == nil {
+		mcpClients = make(map[string]*mcpclient.Client)
+	}
+	if mcpClientCancels == nil {
+		mcpClientCancels = make(map[string]context.CancelFunc)
+	}
 	mcpClients[cacheKey] = c
+	mcpClientCancels[cacheKey] = cancelStart
+	// Keep the legacy global lookup visible for callers and tests that inspect
+	// the command-line configured client directly. Session calls always use the
+	// URL-qualified cache key above.
+	if sessionServers == nil {
+		mcpClients[serverName] = c
+		mcpClientCancels[serverName] = cancelStart
+	}
 	return c, nil
+}
+
+// primeKandevMCPToolCatalog mirrors an MCP-capable agent's initial tools/list
+// request. CI auto-fix dispatch requires persisted evidence of the current
+// catalog before it adds the outcome protocol to a prompt, so the mock agent
+// must observe the injected Kandev tools even when the scenario does not call a
+// tool during its first turn.
+func primeKandevMCPToolCatalog(_ context.Context) {
+	if _, configured := mcpServers["kandev"]; !configured {
+		return
+	}
+	// The MCP connection outlives the ACP request that triggers priming. ACP
+	// cancels NewSession's context after the response, while later prompts use
+	// the cached SSE client and need its session to remain open.
+	primeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := getMCPClientCtx(primeCtx, "kandev"); err != nil {
+		_, _ = fmt.Fprintf(logOutput, "mock-agent: failed to prime Kandev MCP tool catalog: %v\n", err)
+	}
 }
 
 // callMCPTool calls a tool on the named MCP server and returns the result text.
@@ -88,7 +153,7 @@ func callMCPToolCtx(ctx context.Context, serverName, toolName string, args map[s
 // callMCPToolCtxForServers calls a tool using the current ACP session's MCP
 // server definitions. A nil map keeps the command-line configured behavior.
 func callMCPToolCtxForServers(ctx context.Context, sessionServers map[string]mcpServerDef, serverName, toolName string, args map[string]any) (string, error) {
-	c, err := getMCPClientForServers(serverName, sessionServers)
+	c, err := getMCPClientForServersCtx(ctx, serverName, sessionServers)
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +222,17 @@ func cloneMCPServerDefs(defs map[string]mcpServerDef) map[string]mcpServerDef {
 func closeMCPClients() {
 	mcpClientsMu.Lock()
 	defer mcpClientsMu.Unlock()
-	for _, c := range mcpClients {
+	closed := make(map[*mcpclient.Client]struct{}, len(mcpClients))
+	for key, c := range mcpClients {
+		if cancel, ok := mcpClientCancels[key]; ok {
+			cancel()
+		}
+		if _, ok := closed[c]; ok {
+			continue
+		}
+		closed[c] = struct{}{}
 		_ = c.Close()
 	}
+	mcpClients = make(map[string]*mcpclient.Client)
+	mcpClientCancels = make(map[string]context.CancelFunc)
 }
