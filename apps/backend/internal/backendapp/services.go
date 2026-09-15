@@ -196,7 +196,7 @@ func provideServices(cfg *config.Config, log *logger.Logger, repos *Repositories
 		taskSvc.SetTaskStatusSummaryPRReader(&githubTaskStatusSummaryPRReader{gh: githubSvc})
 		githubSvc.SetComparisonTargetObserver(taskSvc)
 		githubSvc.SetPromptResolver(promptSvc)
-		taskSvc.SetContributionDestinationPreparer(&githubContributionDestinationPreparer{service: githubSvc})
+		taskSvc.SetContributionDestinationPreparer(&githubContributionDestinationPreparer{service: githubSvc, taskSvc: taskSvc})
 		if brokerErr := githubSvc.ConfigureCredentialBroker(&githubBrokerScopeAuthorizer{repo: repos.Task, provider: githubSvc}); brokerErr != nil {
 			log.Warn("GitHub credential broker initialization failed", zap.Error(brokerErr))
 		}
@@ -352,6 +352,7 @@ func reserveBuiltinMentionIdentities(
 
 type githubContributionDestinationPreparer struct {
 	service *github.Service
+	taskSvc *taskservice.Service
 }
 
 func (p *githubContributionDestinationPreparer) PrepareContributionDestination(
@@ -404,14 +405,16 @@ func (p *githubContributionDestinationPreparer) prepareRepository(
 	if destination != nil && strings.TrimSpace(destination.SourceRepository.ProviderID) != providerRepoID {
 		return fmt.Errorf("prepare Improve Kandev contribution destination: canonical provider ID is inconsistent")
 	}
-	if err := p.reconcileProviderRepoID(repositoryAt(repositories, index), providerRepoID); err != nil {
+	if err := p.reconcileProviderRepoID(ctx, repositoryAt(repositories, index), providerRepoID); err != nil {
 		return err
 	}
+	input.ProviderRepoID = providerRepoID
 	input.ContributionDestination = destination
 	return nil
 }
 
 func (p *githubContributionDestinationPreparer) reconcileProviderRepoID(
+	ctx context.Context,
 	repository *taskmodels.Repository,
 	providerRepoID string,
 ) error {
@@ -421,14 +424,12 @@ func (p *githubContributionDestinationPreparer) reconcileProviderRepoID(
 	if repository.ProviderRepoID != "" && !strings.EqualFold(repository.ProviderRepoID, providerRepoID) {
 		return fmt.Errorf("prepare Improve Kandev contribution destination: canonical provider ID changed")
 	}
-	// Deliberately does not persist providerRepoID onto the repository row:
-	// repoclone.Cloner's scope-isolated clone layout requires
-	// provider_scope and provider_repo_id together
-	// (WorkspaceProviderRepositoryPath), and the built-in GitHub repository
-	// flow this preparer runs under never resolves a provider connection
-	// scope. Writing repoID alone left the row unusable at the next task
-	// session's workspace setup ("provider scope and repository ID must be
-	// supplied together").
+	if repository.ProviderRepoID == "" && p.taskSvc != nil {
+		if _, err := p.taskSvc.UpdateRepository(ctx, repository.ID, &taskservice.UpdateRepositoryRequest{ProviderRepoID: &providerRepoID}); err != nil {
+			return fmt.Errorf("backfill Improve Kandev canonical provider ID: %w", err)
+		}
+		repository.ProviderRepoID = providerRepoID
+	}
 	return nil
 }
 

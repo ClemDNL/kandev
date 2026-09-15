@@ -431,13 +431,14 @@ func (h *Handler) resolveOrCloneRepo(ctx context.Context, workspaceID, providerR
 		return nil, err
 	}
 	repo, _, err := h.taskSvc.FindOrCreateRepository(ctx, &taskservice.FindOrCreateRepositoryRequest{
-		WorkspaceID:   workspaceID,
-		Provider:      repoProvider,
-		ProviderHost:  "https://github.com",
-		ProviderOwner: repoOwner,
-		ProviderName:  repoName,
-		DefaultBranch: defaultBranch,
-		LocalPath:     localPath,
+		WorkspaceID:    workspaceID,
+		Provider:       repoProvider,
+		ProviderHost:   "https://github.com",
+		ProviderRepoID: providerRepoID,
+		ProviderOwner:  repoOwner,
+		ProviderName:   repoName,
+		DefaultBranch:  defaultBranch,
+		LocalPath:      localPath,
 	})
 	return repo, err
 }
@@ -499,36 +500,25 @@ func (h *Handler) backfillKandevProviderInfo(ctx context.Context, repo *taskmode
 	return nil
 }
 
-// ensureKandevProviderRepoID guards against silently reusing a stale
-// repository row if the canonical kdlbs/kandev GitHub repository ID ever
-// changes (e.g. delete+recreate, ownership transfer), and heals a row a
-// previous version of this bootstrap corrupted by backfilling
-// provider_repo_id alone. repoclone.Cloner's WorkspaceProviderRepositoryPath
-// requires provider_scope and provider_repo_id together to take its
-// scope-isolated clone layout, and this bootstrap's built-in GitHub
-// repository flow never resolves a provider connection scope (only plugin
-// providers do). It must never write repoID on its own, and must clear one
-// it (or an older version of this code) already wrote — otherwise the row
-// fails the next task session's workspace setup with "provider scope and
-// repository ID must be supplied together".
-func (h *Handler) ensureKandevProviderRepoID(ctx context.Context, repo *taskmodels.Repository, providerRepoID string) error {
+func (h *Handler) ensureKandevProviderRepoID(
+	ctx context.Context,
+	repo *taskmodels.Repository,
+	providerRepoID string,
+) error {
 	providerRepoID = strings.TrimSpace(providerRepoID)
-	if repo == nil {
+	if repo == nil || providerRepoID == "" {
 		return nil
 	}
-	if repo.ProviderRepoID != "" && repo.ProviderScope == "" {
-		empty := ""
-		if _, err := h.taskSvc.UpdateRepository(ctx, repo.ID, &taskservice.UpdateRepositoryRequest{ProviderRepoID: &empty}); err != nil {
-			return fmt.Errorf("heal unpaired kdlbs/kandev provider_repo_id: %w", err)
-		}
-		repo.ProviderRepoID = ""
-	}
-	if providerRepoID == "" || repo.ProviderRepoID == "" {
-		return nil
-	}
-	if repo.ProviderRepoID != providerRepoID {
+	if repo.ProviderRepoID != "" && repo.ProviderRepoID != providerRepoID {
 		return errors.New("kdlbs/kandev provider identity changed; refusing to reuse the repository row")
 	}
+	if repo.ProviderRepoID == providerRepoID {
+		return nil
+	}
+	if _, err := h.taskSvc.UpdateRepository(ctx, repo.ID, &taskservice.UpdateRepositoryRequest{ProviderRepoID: &providerRepoID}); err != nil {
+		return fmt.Errorf("backfill kdlbs/kandev provider ID: %w", err)
+	}
+	repo.ProviderRepoID = providerRepoID
 	return nil
 }
 

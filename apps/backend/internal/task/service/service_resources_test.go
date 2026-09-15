@@ -609,7 +609,7 @@ func TestService_FindOrCreateRepositoryNormalizesProviderIdentityWhitespace(t *t
 	}
 	created, wasCreated, err := svc.FindOrCreateRepository(ctx, &FindOrCreateRepositoryRequest{
 		WorkspaceID: "ws-1", Provider: "custom-provider", ProviderHost: "https://forge.example.test",
-		ProviderScope: "forge-instance-a", ProviderRepoID: "repo-99", ProviderOwner: "TEAM", ProviderName: "widgets",
+		ProviderRepoID: "repo-99", ProviderOwner: "TEAM", ProviderName: "widgets",
 		RemoteURL: "https://forge.example.test/scm/TEAM/widgets.git",
 	})
 	if err != nil || !wasCreated {
@@ -618,7 +618,7 @@ func TestService_FindOrCreateRepositoryNormalizesProviderIdentityWhitespace(t *t
 
 	resolved, duplicateCreated, err := svc.FindOrCreateRepository(ctx, &FindOrCreateRepositoryRequest{
 		WorkspaceID: " ws-1 ", Provider: " custom-provider ", ProviderHost: " https://forge.example.test/context ",
-		ProviderScope: " forge-instance-a ", ProviderRepoID: " repo-99 ", ProviderOwner: " TEAM ", ProviderName: " widgets ",
+		ProviderRepoID: " repo-99 ", ProviderOwner: " TEAM ", ProviderName: " widgets ",
 		RemoteURL: " https://forge.example.test/scm/TEAM/widgets.git ",
 	})
 	if err != nil {
@@ -667,20 +667,19 @@ func TestService_FindOrCreateRepositoryRejectsInvalidLocalPathBackfill(t *testin
 	}
 }
 
-// TestService_CreateRepositoryRejectsUnpairedProviderRepoID guards
-// repoclone.Cloner.WorkspaceProviderRepositoryPath's invariant: it requires
-// provider_scope and provider_repo_id together. A caller supplying
-// provider_repo_id with no provider_scope (the built-in GitHub repository
-// flow never resolves one) must be rejected at write time instead of
-// producing a row that fails the next task session's workspace setup.
-func TestService_CreateRepositoryRejectsUnpairedProviderRepoID(t *testing.T) {
+// TestService_CreateRepositoryAcceptsProviderRepoIDWithoutScope guards the
+// actual repoclone.Cloner.WorkspaceProviderRepositoryPath invariant: a bare
+// provider_repo_id with no provider_scope must be accepted — it's the
+// normal shape for every built-in provider (GitHub, GitLab, Azure DevOps),
+// none of which resolve a provider connection scope.
+func TestService_CreateRepositoryAcceptsProviderRepoIDWithoutScope(t *testing.T) {
 	svc, _, repo := createTestService(t)
 	ctx := context.Background()
 	if err := repo.CreateWorkspace(ctx, &models.Workspace{ID: "ws-1", Name: "Workspace"}); err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	_, err := svc.CreateRepository(ctx, &CreateRepositoryRequest{
+	created, err := svc.CreateRepository(ctx, &CreateRepositoryRequest{
 		WorkspaceID:    "ws-1",
 		Name:           "kdlbs/kandev",
 		SourceType:     sourceTypeProvider,
@@ -689,16 +688,43 @@ func TestService_CreateRepositoryRejectsUnpairedProviderRepoID(t *testing.T) {
 		ProviderOwner:  "kdlbs",
 		ProviderName:   "kandev",
 	})
+	if err != nil {
+		t.Fatalf("CreateRepository error = %v, want nil", err)
+	}
+	if created.ProviderRepoID != "1131388506" {
+		t.Fatalf("ProviderRepoID = %q, want %q", created.ProviderRepoID, "1131388506")
+	}
+}
+
+// TestService_CreateRepositoryRejectsProviderScopeWithoutRepoID guards the
+// direction that actually breaks WorkspaceProviderRepositoryPath: a scope
+// alone can't build a unique scoped clone path.
+func TestService_CreateRepositoryRejectsProviderScopeWithoutRepoID(t *testing.T) {
+	svc, _, repo := createTestService(t)
+	ctx := context.Background()
+	if err := repo.CreateWorkspace(ctx, &models.Workspace{ID: "ws-1", Name: "Workspace"}); err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	_, err := svc.CreateRepository(ctx, &CreateRepositoryRequest{
+		WorkspaceID:   "ws-1",
+		Name:          "TEAM/widgets",
+		SourceType:    sourceTypeProvider,
+		Provider:      "custom-provider",
+		ProviderHost:  "https://forge.example.test",
+		ProviderScope: "forge-instance-a",
+		ProviderOwner: "TEAM",
+		ProviderName:  "widgets",
+	})
 	if !errors.Is(err, ErrInvalidRepositorySettings) {
 		t.Fatalf("CreateRepository error = %v, want ErrInvalidRepositorySettings", err)
 	}
 }
 
-// TestService_FindOrCreateRepositoryDoesNotBackfillRepoIDWithoutPairedScope
-// covers the existing-row backfill path: it must not write provider_repo_id
-// onto a row whose provider_scope is (and stays) empty, even though the
-// overall call still succeeds and resolves the existing row.
-func TestService_FindOrCreateRepositoryDoesNotBackfillRepoIDWithoutPairedScope(t *testing.T) {
+// TestService_FindOrCreateRepositoryBackfillsRepoIDWithoutScope covers the
+// existing-row backfill path: it must still write a bare provider_repo_id
+// onto a row whose provider_scope stays empty — that pairing is valid.
+func TestService_FindOrCreateRepositoryBackfillsRepoIDWithoutScope(t *testing.T) {
 	svc, _, repo := createTestService(t)
 	ctx := context.Background()
 	if err := repo.CreateWorkspace(ctx, &models.Workspace{ID: "ws-1", Name: "Workspace"}); err != nil {
@@ -731,15 +757,15 @@ func TestService_FindOrCreateRepositoryDoesNotBackfillRepoIDWithoutPairedScope(t
 	if wasCreated || resolved.ID != created.ID {
 		t.Fatalf("resolved repository = %q (created=%t), want existing %q", resolved.ID, wasCreated, created.ID)
 	}
-	if resolved.ProviderRepoID != "" {
-		t.Fatalf("ProviderRepoID = %q, want left empty (no paired provider_scope to backfill alongside it)", resolved.ProviderRepoID)
+	if resolved.ProviderRepoID != "1131388506" {
+		t.Fatalf("ProviderRepoID = %q, want backfilled %q", resolved.ProviderRepoID, "1131388506")
 	}
 	stored, err := repo.GetRepository(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetRepository: %v", err)
 	}
-	if stored.ProviderRepoID != "" {
-		t.Fatalf("persisted ProviderRepoID = %q, want empty", stored.ProviderRepoID)
+	if stored.ProviderRepoID != "1131388506" {
+		t.Fatalf("persisted ProviderRepoID = %q, want %q", stored.ProviderRepoID, "1131388506")
 	}
 }
 

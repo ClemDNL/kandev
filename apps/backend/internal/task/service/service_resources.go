@@ -71,16 +71,16 @@ func validateProviderScope(raw string) (string, error) {
 	return scope, nil
 }
 
-// validateProviderScopeAndRepoIDPair enforces that provider_scope and
-// provider_repo_id are either both set or both empty. repoclone.Cloner's
-// WorkspaceProviderRepositoryPath switches to its scope-isolated clone
-// layout whenever either field is non-empty and errors if only one is
-// present; persisting a lone provider_repo_id (or provider_scope) here
-// looks harmless at write time but leaves the row unusable the next time a
-// task session in its workspace tries to clone it.
+// validateProviderScopeAndRepoIDPair enforces repoclone.Cloner's
+// WorkspaceProviderRepositoryPath invariant: a non-empty provider_scope
+// requires a paired provider_repo_id, because the scope-isolated clone
+// layout needs both to build a unique path. A bare provider_repo_id with no
+// scope is fine — that's the normal shape for every built-in provider
+// (GitHub, GitLab, Azure DevOps), none of which resolve a provider
+// connection scope — and falls through to the legacy owner/name layout.
 func validateProviderScopeAndRepoIDPair(scope, repoID string) error {
-	if (strings.TrimSpace(scope) == "") != (strings.TrimSpace(repoID) == "") {
-		return fmt.Errorf("%w: provider_scope and provider_repo_id must be supplied together", ErrInvalidRepositorySettings)
+	if strings.TrimSpace(scope) != "" && strings.TrimSpace(repoID) == "" {
+		return fmt.Errorf("%w: provider_scope requires a paired provider_repo_id", ErrInvalidRepositorySettings)
 	}
 	return nil
 }
@@ -993,11 +993,7 @@ func (s *Service) FindOrCreateRepository(ctx context.Context, req *FindOrCreateR
 			existing.RemoteURL = req.RemoteURL
 			dirty = true
 		}
-		// Only backfill provider_repo_id when a scope is (or has just been)
-		// paired with it: WorkspaceProviderRepositoryPath requires both
-		// non-empty together, and a lone repoID broke session workspace
-		// setup for rows this backfill previously touched.
-		if existing.ProviderRepoID == "" && req.ProviderRepoID != "" && existing.ProviderScope != "" {
+		if existing.ProviderRepoID == "" && req.ProviderRepoID != "" {
 			existing.ProviderRepoID = req.ProviderRepoID
 			dirty = true
 		}
