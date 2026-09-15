@@ -18,16 +18,27 @@ var (
 
 // getMCPClient returns (or creates) an initialized MCP client for the named server.
 func getMCPClient(serverName string) (*mcpclient.Client, error) {
+	return getMCPClientForServers(serverName, nil)
+}
+
+// getMCPClientForServers returns an initialized client for a server definition
+// supplied by the current ACP session. The mock agent can serve multiple ACP
+// sessions at the same time. Their Kandev SSE URLs contain session-specific
+// routing state, so the cache key must include the endpoint URL.
+func getMCPClientForServers(serverName string, sessionServers map[string]mcpServerDef) (*mcpclient.Client, error) {
 	mcpClientsMu.Lock()
 	defer mcpClientsMu.Unlock()
 
-	if c, ok := mcpClients[serverName]; ok {
-		return c, nil
+	srv, ok := sessionServers[serverName]
+	if !ok {
+		srv, ok = mcpServers[serverName]
 	}
-
-	srv, ok := mcpServers[serverName]
 	if !ok {
 		return nil, fmt.Errorf("unknown MCP server: %s", serverName)
+	}
+	cacheKey := serverName + "\x00" + srv.URL
+	if c, ok := mcpClients[cacheKey]; ok {
+		return c, nil
 	}
 
 	c, err := mcpclient.NewSSEMCPClient(srv.URL)
@@ -56,7 +67,7 @@ func getMCPClient(serverName string) (*mcpclient.Client, error) {
 		return nil, fmt.Errorf("list MCP tools %s: %w", serverName, err)
 	}
 
-	mcpClients[serverName] = c
+	mcpClients[cacheKey] = c
 	return c, nil
 }
 
@@ -68,7 +79,13 @@ func callMCPTool(serverName, toolName string, args map[string]any) (string, erro
 // callMCPToolCtx calls a tool on the named MCP server with a caller-provided context.
 // Use this when the caller needs to impose a timeout on the MCP call.
 func callMCPToolCtx(ctx context.Context, serverName, toolName string, args map[string]any) (string, error) {
-	c, err := getMCPClient(serverName)
+	return callMCPToolCtxForServers(ctx, nil, serverName, toolName, args)
+}
+
+// callMCPToolCtxForServers calls a tool using the current ACP session's MCP
+// server definitions. A nil map keeps the command-line configured behavior.
+func callMCPToolCtxForServers(ctx context.Context, sessionServers map[string]mcpServerDef, serverName, toolName string, args map[string]any) (string, error) {
+	c, err := getMCPClientForServers(serverName, sessionServers)
 	if err != nil {
 		return "", err
 	}
@@ -99,18 +116,38 @@ func extractMCPResultText(result *mcp.CallToolResult) string {
 	return strings.Join(parts, "\n")
 }
 
-// registerACPMcpServers adds SSE MCP servers from an ACP NewSessionRequest
-// to the global mcpServers map so callMCPTool can reach them.
-func registerACPMcpServers(servers []acp.McpServer) {
+// registerACPMcpServers adds SSE MCP servers from an ACP NewSessionRequest to
+// the global map and returns a session-owned copy for callers that need to
+// preserve the endpoint selected for that ACP session.
+func registerACPMcpServers(servers []acp.McpServer) map[string]mcpServerDef {
+	registered := make(map[string]mcpServerDef)
 	for _, s := range servers {
 		if s.Sse != nil && s.Sse.Name != "" && s.Sse.Url != "" {
-			if mcpServers == nil {
-				mcpServers = make(map[string]mcpServerDef)
-			}
-			mcpServers[s.Sse.Name] = mcpServerDef{URL: s.Sse.Url, Type: "sse"}
-			_, _ = fmt.Fprintf(logOutput, "mock-agent: registered ACP MCP server %s at %s\n", s.Sse.Name, s.Sse.Url)
+			registered[s.Sse.Name] = mcpServerDef{URL: s.Sse.Url, Type: "sse"}
 		}
 	}
+
+	mcpClientsMu.Lock()
+	defer mcpClientsMu.Unlock()
+	if mcpServers == nil {
+		mcpServers = make(map[string]mcpServerDef)
+	}
+	for name, server := range registered {
+		mcpServers[name] = server
+		_, _ = fmt.Fprintf(logOutput, "mock-agent: registered ACP MCP server %s at %s\n", name, server.URL)
+	}
+	return registered
+}
+
+func cloneMCPServerDefs(defs map[string]mcpServerDef) map[string]mcpServerDef {
+	if len(defs) == 0 {
+		return nil
+	}
+	cloned := make(map[string]mcpServerDef, len(defs))
+	for name, def := range defs {
+		cloned[name] = def
+	}
+	return cloned
 }
 
 // closeMCPClients closes all open MCP clients (called on shutdown).

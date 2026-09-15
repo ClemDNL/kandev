@@ -129,7 +129,9 @@ test.describe("Comment run sends directly when agent is idle", () => {
 
     // 6. The comment should appear in the chat as a direct message.
     await expect(
-      session.chat.getByText("Refactor step 1 to use dependency injection", { exact: false }),
+      session.chat
+        .getByTestId("user-message-bubble")
+        .filter({ hasText: "Refactor step 1 to use dependency injection" }),
     ).toBeVisible({ timeout: 15_000 });
 
     // 7. The agent should start processing (proves it was sent as message.add, not queued).
