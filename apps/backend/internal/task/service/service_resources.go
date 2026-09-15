@@ -79,7 +79,7 @@ func validateProviderScope(raw string) (string, error) {
 // looks harmless at write time but leaves the row unusable the next time a
 // task session in its workspace tries to clone it.
 func validateProviderScopeAndRepoIDPair(scope, repoID string) error {
-	if (scope == "") != (repoID == "") {
+	if (strings.TrimSpace(scope) == "") != (strings.TrimSpace(repoID) == "") {
 		return fmt.Errorf("%w: provider_scope and provider_repo_id must be supplied together", ErrInvalidRepositorySettings)
 	}
 	return nil

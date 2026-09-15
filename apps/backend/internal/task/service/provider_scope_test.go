@@ -37,3 +37,20 @@ func TestApplyRepositoryUpdatesRejectsUnpairedProviderRepoID(t *testing.T) {
 		t.Fatalf("applyRepositoryUpdates error = %v, want ErrInvalidRepositorySettings", err)
 	}
 }
+
+// TestApplyRepositoryUpdatesRejectsWhitespaceOnlyRepoIDWithScope guards
+// against a whitespace-only provider_repo_id slipping past the pairing
+// check unnoticed: WorkspaceProviderRepositoryPath trims both fields before
+// deciding whether they are present, so an untrimmed "   " paired with a
+// real provider_scope would pass this validator but still trip the
+// "supplied together" clone-path error once trimmed.
+func TestApplyRepositoryUpdatesRejectsWhitespaceOnlyRepoIDWithScope(t *testing.T) {
+	repository := &models.Repository{ProviderScope: "existing-scope"}
+	repoID := "   "
+
+	err := applyRepositoryUpdates(repository, &UpdateRepositoryRequest{ProviderRepoID: &repoID})
+
+	if !errors.Is(err, ErrInvalidRepositorySettings) {
+		t.Fatalf("applyRepositoryUpdates error = %v, want ErrInvalidRepositorySettings", err)
+	}
+}
