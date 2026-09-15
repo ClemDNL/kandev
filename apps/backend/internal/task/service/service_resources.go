@@ -71,6 +71,20 @@ func validateProviderScope(raw string) (string, error) {
 	return scope, nil
 }
 
+// validateProviderScopeAndRepoIDPair enforces that provider_scope and
+// provider_repo_id are either both set or both empty. repoclone.Cloner's
+// WorkspaceProviderRepositoryPath switches to its scope-isolated clone
+// layout whenever either field is non-empty and errors if only one is
+// present; persisting a lone provider_repo_id (or provider_scope) here
+// looks harmless at write time but leaves the row unusable the next time a
+// task session in its workspace tries to clone it.
+func validateProviderScopeAndRepoIDPair(scope, repoID string) error {
+	if (scope == "") != (repoID == "") {
+		return fmt.Errorf("%w: provider_scope and provider_repo_id must be supplied together", ErrInvalidRepositorySettings)
+	}
+	return nil
+}
+
 type workspaceDeleteTaskCleanup struct {
 	task        *models.Task
 	sessions    []*models.TaskSession
@@ -814,6 +828,10 @@ func (s *Service) createRepository(
 		resolveRepositoryProviderIdentity(repository)
 	}
 
+	if err := validateProviderScopeAndRepoIDPair(repository.ProviderScope, repository.ProviderRepoID); err != nil {
+		return nil, err
+	}
+
 	if mutator, ok := s.repoEntities.(taskrepo.RepositorySecretBindingMutator); ok {
 		if err := mutator.CreateRepositoryWithSecretBindings(ctx, repository, bindings); err != nil {
 			s.logger.Error("failed to create repository", zap.Error(err))
@@ -975,7 +993,11 @@ func (s *Service) FindOrCreateRepository(ctx context.Context, req *FindOrCreateR
 			existing.RemoteURL = req.RemoteURL
 			dirty = true
 		}
-		if existing.ProviderRepoID == "" && req.ProviderRepoID != "" {
+		// Only backfill provider_repo_id when a scope is (or has just been)
+		// paired with it: WorkspaceProviderRepositoryPath requires both
+		// non-empty together, and a lone repoID broke session workspace
+		// setup for rows this backfill previously touched.
+		if existing.ProviderRepoID == "" && req.ProviderRepoID != "" && existing.ProviderScope != "" {
 			existing.ProviderRepoID = req.ProviderRepoID
 			dirty = true
 		}
@@ -1214,6 +1236,9 @@ func applyRepositoryUpdates(repository *models.Repository, req *UpdateRepository
 			return fmt.Errorf("%w: %s", ErrInvalidRepositorySettings, err)
 		}
 		repository.CopyFiles = *req.CopyFiles
+	}
+	if err := validateProviderScopeAndRepoIDPair(repository.ProviderScope, repository.ProviderRepoID); err != nil {
+		return err
 	}
 	return nil
 }

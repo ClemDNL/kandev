@@ -12,11 +12,18 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
+
 	"github.com/kandev/kandev/internal/auth/authn"
 	"github.com/kandev/kandev/internal/common/logger"
+	"github.com/kandev/kandev/internal/db"
+	"github.com/kandev/kandev/internal/events/bus"
 	"github.com/kandev/kandev/internal/github"
 	"github.com/kandev/kandev/internal/system/logbundle"
 	taskmodels "github.com/kandev/kandev/internal/task/models"
+	"github.com/kandev/kandev/internal/task/repository"
+	tasksqlite "github.com/kandev/kandev/internal/task/repository/sqlite"
+	taskservice "github.com/kandev/kandev/internal/task/service"
 )
 
 // fakeGitHubInfo is a configurable GitHubInfo for unit tests. Each method
@@ -337,6 +344,119 @@ func TestFindKandevRepoByLocalRemote_NilResolver(t *testing.T) {
 	repos := []*taskmodels.Repository{{ID: "x", LocalPath: "/p"}}
 	if got := findKandevRepoByLocalRemote(repos, nil); got != nil {
 		t.Errorf("nil resolver must return nil, got %v", got)
+	}
+}
+
+// TestEnsureKandevProviderRepoID_NeverPersistsUnpairedRepoID guards the
+// kdlbs/kandev bootstrap regression where backfilling provider_repo_id onto
+// a repository row with no provider_scope left the row unusable at the next
+// task session's workspace setup ("provider scope and repository ID must be
+// supplied together" from repoclone.Cloner.WorkspaceProviderRepositoryPath).
+// The built-in GitHub repository flow this handler drives never resolves a
+// provider connection scope, so ensureKandevProviderRepoID must never write
+// provider_repo_id on its own.
+func TestEnsureKandevProviderRepoID_NeverPersistsUnpairedRepoID(t *testing.T) {
+	h := newTestHandler(nil)
+	repo := &taskmodels.Repository{ID: "repo-1", Provider: "github", ProviderOwner: "kdlbs", ProviderName: "kandev"}
+
+	if err := h.ensureKandevProviderRepoID(context.Background(), repo, "1131388506"); err != nil {
+		t.Fatalf("ensureKandevProviderRepoID() error = %v, want nil", err)
+	}
+	if repo.ProviderRepoID != "" {
+		t.Fatalf("ProviderRepoID = %q, want unchanged empty (would violate the provider_scope/provider_repo_id pair invariant)", repo.ProviderRepoID)
+	}
+}
+
+func TestEnsureKandevProviderRepoID_DetectsIdentityDriftOnAlreadyPairedRow(t *testing.T) {
+	h := newTestHandler(nil)
+	repo := &taskmodels.Repository{
+		ID: "repo-1", Provider: "github", ProviderOwner: "kdlbs", ProviderName: "kandev",
+		ProviderScope: "kdlbs", ProviderRepoID: "1131388506",
+	}
+
+	if err := h.ensureKandevProviderRepoID(context.Background(), repo, "1131388506"); err != nil {
+		t.Fatalf("matching ID: ensureKandevProviderRepoID() error = %v, want nil", err)
+	}
+
+	err := h.ensureKandevProviderRepoID(context.Background(), repo, "999999999")
+	if err == nil {
+		t.Fatal("mismatched ID: ensureKandevProviderRepoID() error = nil, want identity-changed error")
+	}
+	if repo.ProviderRepoID != "1131388506" {
+		t.Fatalf("ProviderRepoID = %q, want unchanged %q after a rejected identity change", repo.ProviderRepoID, "1131388506")
+	}
+}
+
+// newEnsureProviderRepoIDTestService builds a real, minimal
+// *taskservice.Service backed by a temp SQLite DB. ensureKandevProviderRepoID
+// heals rows through h.taskSvc.UpdateRepository, so exercising it end to end
+// needs a real service rather than a fake.
+func newEnsureProviderRepoIDTestService(t *testing.T) (*taskservice.Service, *tasksqlite.Repository) {
+	t.Helper()
+	dbConn, err := db.OpenSQLite(filepath.Join(t.TempDir(), "ensure-provider-repo-id.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	database := sqlx.NewDb(dbConn, "sqlite3")
+	t.Cleanup(func() { _ = database.Close() })
+	repo, cleanup, err := repository.Provide(database, database, nil)
+	if err != nil {
+		t.Fatalf("task repository: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := taskservice.NewService(taskservice.Repos{
+		Workspaces:   repo,
+		Tasks:        repo,
+		TaskRepos:    repo,
+		Workflows:    repo,
+		Messages:     repo,
+		Turns:        repo,
+		Sessions:     repo,
+		GitSnapshots: repo,
+		RepoEntities: repo,
+	}, bus.NewMemoryEventBus(logger.Default()), logger.Default(), taskservice.RepositoryDiscoveryConfig{})
+	return svc, repo
+}
+
+// TestEnsureKandevProviderRepoID_HealsExistingUnpairedRow reproduces the
+// live production row (kdlbs/kandev, Improve Kandev workspace) a previous
+// version of this bootstrap left with provider_repo_id set and
+// provider_scope empty, which made every task session in that workspace
+// fail workspace setup with "provider scope and repository ID must be
+// supplied together". ensureKandevProviderRepoID must clear the unpaired ID
+// so the row becomes usable again via the legacy owner/name clone path.
+func TestEnsureKandevProviderRepoID_HealsExistingUnpairedRow(t *testing.T) {
+	taskSvc, rawRepo := newEnsureProviderRepoIDTestService(t)
+	h := &Handler{taskSvc: taskSvc, log: logger.Default()}
+	ctx := context.Background()
+
+	if err := rawRepo.CreateWorkspace(ctx, &taskmodels.Workspace{ID: "ws-improve", Name: "Improve Kandev"}); err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	// Bypass service validation to plant the exact corrupted legacy state:
+	// provider_repo_id set, provider_scope empty. The (now-guarded) service
+	// layer would reject writing this pair going forward.
+	corrupted := &taskmodels.Repository{
+		ID: "repo-kandev", WorkspaceID: "ws-improve", Name: "kdlbs/kandev",
+		Provider: "github", ProviderHost: "https://github.com",
+		ProviderOwner: "kdlbs", ProviderName: "kandev", ProviderRepoID: "1131388506",
+	}
+	if err := rawRepo.CreateRepository(ctx, corrupted); err != nil {
+		t.Fatalf("plant corrupted repository: %v", err)
+	}
+
+	if err := h.ensureKandevProviderRepoID(ctx, corrupted, "1131388506"); err != nil {
+		t.Fatalf("ensureKandevProviderRepoID() error = %v, want nil", err)
+	}
+	if corrupted.ProviderRepoID != "" {
+		t.Fatalf("in-memory ProviderRepoID = %q, want healed to empty", corrupted.ProviderRepoID)
+	}
+	stored, err := taskSvc.GetRepository(ctx, "repo-kandev")
+	if err != nil {
+		t.Fatalf("GetRepository: %v", err)
+	}
+	if stored.ProviderRepoID != "" {
+		t.Fatalf("persisted ProviderRepoID = %q, want healed to empty", stored.ProviderRepoID)
 	}
 }
 

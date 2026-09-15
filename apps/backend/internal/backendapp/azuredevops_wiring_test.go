@@ -23,7 +23,7 @@ func TestRepositoryLookupAdapterResolvesOnlyTaskLinkedAzureRepository(t *testing
 	}
 	repository, err := harness.taskSvc.CreateRepository(t.Context(), &taskservice.CreateRepositoryRequest{
 		WorkspaceID: workspaces[0].ID, Name: "Azure repository", SourceType: "provider",
-		Provider: azuredevops.RepositoryProvider, ProviderRepoID: "azure-repo-1",
+		Provider: azuredevops.RepositoryProvider, ProviderScope: "org-1", ProviderRepoID: "azure-repo-1",
 		ProviderOwner: "project-1", ProviderName: "platform", DefaultBranch: "main",
 	})
 	if err != nil {
