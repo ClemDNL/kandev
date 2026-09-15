@@ -96,6 +96,7 @@ type Service struct {
 
 	pluginsDir          string
 	store               store.Store
+	approvals           *approvalLedger
 	registry            *Registry
 	state               *state.Store
 	userState           *state.UserStore
@@ -699,6 +700,7 @@ func (s *Service) SetPluginsDir(dir string) error {
 	// Keep package installation rooted correctly even when durable conversation
 	// state initialization fails and the caller continues in degraded mode.
 	s.pluginsDir = dir
+	s.approvals = newApprovalLedger(dir)
 	hostDir := filepath.Join(dir, ".host")
 	conversationTokens, err := loadOrCreateConversationTokenManager(
 		filepath.Join(hostDir, "conversation-token.key"),
