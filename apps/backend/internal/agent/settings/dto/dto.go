@@ -143,8 +143,11 @@ type AgentDTO struct {
 	// flag agents that need login or reinstallation without fetching the
 	// full model config separately. "" for agents that aren't probed
 	// (mock, tui-only).
-	CapabilityStatus string    `json:"capability_status,omitempty"`
-	CapabilityError  string    `json:"capability_error,omitempty"`
+	CapabilityStatus string `json:"capability_status,omitempty"`
+	CapabilityError  string `json:"capability_error,omitempty"`
+	// InferenceCapable identifies agents accepted by the sessionless host
+	// utility runner. Profile pickers use it to prevent invalid selections.
+	InferenceCapable bool      `json:"inference_capable"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
@@ -426,10 +429,11 @@ type ListAgentUpdateJobsResponse struct {
 }
 
 type AgentProfileMcpConfigDTO struct {
-	ProfileID string                         `json:"profile_id"`
-	Enabled   bool                           `json:"enabled"`
-	Servers   map[string]mcpconfig.ServerDef `json:"servers"`
-	Meta      map[string]any                 `json:"meta,omitempty"`
+	ProfileID   string                         `json:"profile_id"`
+	WorkspaceID string                         `json:"-"`
+	Enabled     bool                           `json:"enabled"`
+	Servers     map[string]mcpconfig.ServerDef `json:"servers"`
+	Meta        map[string]any                 `json:"meta,omitempty"`
 }
 
 // CommandPreviewRequest is the request body for previewing the agent CLI command

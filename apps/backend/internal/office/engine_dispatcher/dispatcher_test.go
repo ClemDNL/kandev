@@ -71,6 +71,14 @@ type fakeEngine struct {
 	roleResult         string
 	roleParticipantID  string
 	roleErr            error
+
+	roleReadOnlyCalled         bool
+	roleReadOnlyTaskID         string
+	roleReadOnlyStepID         string
+	roleReadOnlyAgentProfileID string
+	roleReadOnlyResult         string
+	roleReadOnlyParticipantID  string
+	roleReadOnlyErr            error
 }
 
 func (f *fakeEngine) HandleTrigger(_ context.Context, in engine.HandleInput) (engine.HandleResult, error) {
@@ -107,12 +115,22 @@ func (f *fakeEngine) ResolveParticipantRole(
 	return f.roleResult, f.roleParticipantID, f.roleErr
 }
 
+func (f *fakeEngine) ResolveParticipantRoleReadOnly(
+	_ context.Context, taskID, stepID, agentProfileID string,
+) (string, string, error) {
+	f.roleReadOnlyCalled = true
+	f.roleReadOnlyTaskID = taskID
+	f.roleReadOnlyStepID = stepID
+	f.roleReadOnlyAgentProfileID = agentProfileID
+	return f.roleReadOnlyResult, f.roleReadOnlyParticipantID, f.roleReadOnlyErr
+}
+
 type realRunsAdapter struct {
 	svc *runsservice.Service
 }
 
-func (a realRunsAdapter) QueueRun(ctx context.Context, req engine.QueueRunRequest) error {
-	return a.svc.QueueRun(ctx, runsservice.QueueRunRequest{
+func (a realRunsAdapter) QueueRun(ctx context.Context, req engine.QueueRunRequest) (engine.QueueOutcome, error) {
+	outcome, err := a.svc.QueueRun(ctx, runsservice.QueueRunRequest{
 		AgentProfileID: req.AgentProfileID,
 		TaskID:         req.TaskID,
 		WorkflowStepID: req.WorkflowStepID,
@@ -120,6 +138,7 @@ func (a realRunsAdapter) QueueRun(ctx context.Context, req engine.QueueRunReques
 		IdempotencyKey: req.IdempotencyKey,
 		Payload:        req.Payload,
 	})
+	return engine.QueueOutcome(outcome), err
 }
 
 type stubPrimary struct {

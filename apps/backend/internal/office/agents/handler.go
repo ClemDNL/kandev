@@ -107,6 +107,23 @@ func CallerFromContext(c *gin.Context) *models.AgentInstance {
 	return agentCallerFromCtx(c)
 }
 
+// ClaimsFromContext exposes the validated agent JWT claims (or nil for UI
+// requests) to other office packages, without depending on the agents
+// package's internal context-key constants. The workspace claim is what
+// AgentAuthMiddleware compares against `:wsId`; the HTTP scope guard needs
+// the same value to confine a token to its own workspace on by-ID routes,
+// where there is no `:wsId` to compare. The task claim is the only source
+// of caller task identity, used by callers such as the dashboard comment
+// read guard to authorize an agent against the target task.
+func ClaimsFromContext(c *gin.Context) *AgentClaims {
+	val, ok := c.Get(ctxKeyAgentClaims)
+	if !ok {
+		return nil
+	}
+	claims, _ := val.(*AgentClaims)
+	return claims
+}
+
 // -- Agent handlers --
 
 func (h *Handler) listAgents(c *gin.Context) {
@@ -372,10 +389,22 @@ func (h *Handler) updateAgentStatus(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	agent, err := h.svc.UpdateAgentStatus(
-		c.Request.Context(), c.Param("id"),
-		models.AgentStatus(req.Status), req.PauseReason)
+	var agent *models.AgentInstance
+	var err error
+	if req.ExpectedStatus != nil {
+		agent, err = h.svc.UpdateAgentStatusIfCurrent(
+			c.Request.Context(), c.Param("id"), *req.ExpectedStatus,
+			models.AgentStatus(req.Status), req.PauseReason)
+	} else {
+		agent, err = h.svc.UpdateAgentStatus(
+			c.Request.Context(), c.Param("id"),
+			models.AgentStatus(req.Status), req.PauseReason)
+	}
 	if err != nil {
+		if errors.Is(err, ErrAgentStatusStale) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

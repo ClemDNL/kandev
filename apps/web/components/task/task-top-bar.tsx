@@ -10,6 +10,7 @@ import { useOfficeProject } from "@/hooks/use-office-workspace-data";
 import { TaskTopBarTitle } from "@/components/task/task-top-bar-title";
 import { EditorsMenu } from "@/components/task/editors-menu";
 import { LayoutPresetSelector } from "@/components/task/layout-preset-selector";
+import { TaskRightPanelsToggle } from "@/components/task/task-right-panels-toggle";
 import { DocumentControls } from "@/components/task/document/document-controls";
 import { PRTopbarButton } from "@/components/github/pr-topbar-button";
 import { MRTopbarButton } from "@/components/gitlab/mr-topbar-button";
@@ -20,12 +21,15 @@ import { useLinearAvailable } from "@/hooks/domains/linear/use-linear-availabili
 import { PortForwardButton } from "@/components/task/port-forward-dialog";
 import { ExecutorSettingsButton } from "@/components/task/executor-settings-button";
 import { TaskUnarchiveButton } from "@/components/task/task-unarchive-button";
+import { TaskAssigneeControl } from "@/components/task/task-assignee-control";
 import { WorkflowStepper, type WorkflowStepperStep } from "@/components/task/workflow-stepper";
 import { TaskTopBarPluginActions } from "@/components/task/task-top-bar-plugin-actions";
+import { TaskTopBarActionsMenu } from "@/components/task/task-top-bar-actions-menu";
 import { TopbarMetrics } from "@/components/system-metrics/topbar-metrics";
 import { RegisteredChangeRequestStatus } from "@/components/integrations/registered-change-request-status";
 import { isDebugUI } from "@/lib/config";
 import { useTranslation } from "react-i18next";
+import type { TaskActionsMenuBoardRow } from "@/hooks/use-task-actions-menu";
 
 type TaskTopBarProps = {
   taskId?: string | null;
@@ -38,6 +42,7 @@ type TaskTopBarProps = {
   workflowSteps?: WorkflowStepperStep[];
   currentStepId?: string | null;
   workflowId?: string | null;
+  taskState?: string | null;
   workspaceId?: string | null;
   projectId?: string | null;
   issueUrl?: string;
@@ -47,6 +52,13 @@ type TaskTopBarProps = {
   remoteExecutorType?: string | null;
   officeTaskHref?: string | null;
   onTaskUnarchived?: (taskId: string) => void;
+  onMoveStart?: () => void;
+  onMoveError?: (error: unknown) => void;
+  actionsMenuBoardRow?: TaskActionsMenuBoardRow | null;
+  /** The subject task's own values, independent of `actionsMenuBoardRow` (see
+   * `TaskTopBarActionsMenuProps` for why the board row cannot be relied on). */
+  subjectWorkflowStepId?: string | null;
+  subjectPrimaryExecutorType?: string | null;
 };
 
 const TaskTopBar = memo(function TaskTopBar({
@@ -59,6 +71,7 @@ const TaskTopBar = memo(function TaskTopBar({
   workflowSteps,
   currentStepId,
   workflowId,
+  taskState,
   workspaceId,
   projectId,
   isArchived,
@@ -68,6 +81,11 @@ const TaskTopBar = memo(function TaskTopBar({
   remoteExecutorType,
   officeTaskHref,
   onTaskUnarchived,
+  onMoveStart,
+  onMoveError,
+  actionsMenuBoardRow,
+  subjectWorkflowStepId,
+  subjectPrimaryExecutorType,
 }: TaskTopBarProps) {
   const { t } = useTranslation();
   // Projects only exist for office-owned tasks, so kanban-mode tasks render no
@@ -100,7 +118,10 @@ const TaskTopBar = memo(function TaskTopBar({
             currentStepId={currentStepId ?? null}
             taskId={taskId ?? null}
             workflowId={workflowId ?? null}
+            taskState={taskState}
             isArchived={isArchived}
+            onMoveStart={onMoveStart}
+            onMoveError={onMoveError}
           />
         ) : undefined
       }
@@ -121,6 +142,9 @@ const TaskTopBar = memo(function TaskTopBar({
           issueNumber={issueNumber}
           officeTaskHref={officeTaskHref}
           onTaskUnarchived={onTaskUnarchived}
+          actionsMenuBoardRow={actionsMenuBoardRow}
+          subjectWorkflowStepId={subjectWorkflowStepId}
+          subjectPrimaryExecutorType={subjectPrimaryExecutorType}
         />
       }
     />
@@ -323,15 +347,16 @@ function TopbarToolsGroup({
   const showDebugToggle = isDebugUI() && onToggleDebugOverlay;
 
   return (
-    <TopbarCluster label={t("task:taskTools")} className="[&_button]:h-7 [&_button]:text-xs">
+    <TopbarCluster label={t("task:taskTools")}>
+      <TaskRightPanelsToggle sessionId={activeSessionId ?? null} />
       {!isArchived && (
-        <>
+        <div className="inline-flex items-center gap-1 [&_button]:h-7 [&_button]:text-xs">
           <LayoutPresetSelector />
           <EditorsMenu
             activeSessionId={activeSessionId ?? null}
             embeddedVscodeSupported={embeddedVscodeSupported ?? false}
           />
-        </>
+        </div>
       )}
       {showDebugToggle && (
         <DebugOverlayToggle
@@ -359,6 +384,9 @@ function TopBarRight({
   issueNumber,
   officeTaskHref,
   onTaskUnarchived,
+  actionsMenuBoardRow,
+  subjectWorkflowStepId,
+  subjectPrimaryExecutorType,
 }: {
   taskId?: string | null;
   activeSessionId?: string | null;
@@ -372,6 +400,9 @@ function TopBarRight({
   issueNumber?: number;
   officeTaskHref?: string | null;
   onTaskUnarchived?: (taskId: string) => void;
+  actionsMenuBoardRow?: TaskActionsMenuBoardRow | null;
+  subjectWorkflowStepId?: string | null;
+  subjectPrimaryExecutorType?: string | null;
 }) {
   const { t } = useTranslation();
   return (
@@ -400,11 +431,14 @@ function TopBarRight({
       )}
       {officeTaskHref && (
         <TopbarCluster label={t("task:openInOfficeView")} className="[&_a]:h-7 [&_a]:text-xs">
-          <Button asChild size="sm" variant="outline" className="h-7 cursor-pointer px-2">
+          <Button asChild size="sm" variant="outline" className="cursor-pointer px-2">
             <Link href={officeTaskHref}>{t("task:openInOfficeView")}</Link>
           </Button>
         </TopbarCluster>
       )}
+      <TopbarCluster label={t("task:assignedTo")} className="[&_button]:h-7 [&_button]:text-xs">
+        <TaskAssigneeControl taskId={taskId} workspaceId={workspaceId} isArchived={isArchived} />
+      </TopbarCluster>
       <AttentionStatusGroup
         taskId={taskId}
         activeSessionId={activeSessionId}
@@ -421,6 +455,15 @@ function TopBarRight({
         isArchived={isArchived}
         embeddedVscodeSupported={embeddedVscodeSupported}
       />
+      <TaskTopBarActionsMenu
+        taskId={taskId ?? null}
+        taskTitle={taskTitle ?? ""}
+        boardRow={actionsMenuBoardRow ?? null}
+        workspaceId={workspaceId ?? null}
+        isArchived={isArchived}
+        subjectWorkflowStepId={subjectWorkflowStepId}
+        subjectPrimaryExecutorType={subjectPrimaryExecutorType}
+      />
     </div>
   );
 }
@@ -431,6 +474,7 @@ function shouldShowExecutorEnvironmentControls(executorType?: string | null): bo
     case "remote_docker":
     case "sprites":
     case "ssh":
+    case "k8s":
       return true;
     default:
       return false;

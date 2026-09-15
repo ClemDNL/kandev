@@ -1,6 +1,6 @@
 # 0001: File-based knowledge system
 
-**Status:** accepted (specification layout amended by ADR-2026-08-22-system-oriented-specifications)
+**Status:** accepted (specification layout amended by ADR-2026-08-22-system-oriented-specifications and ADR-2026-09-07-on-demand-document-catalogs)
 **Date:** 2026-03-28 (amended 2026-08-22)
 **Area:** infra
 
@@ -13,7 +13,7 @@ Agents working on Kandev had no way to record architectural decisions or store i
 Use a three-tier, file-based knowledge system:
 
 - **Tier 1 (always loaded):** `CLAUDE.md` stays slim and points to Tier 2 indexes.
-- **Tier 2 (index files):** `docs/decisions/INDEX.md` and `docs/specs/INDEX.md` — one-line-per-entry tables that agents read to find relevant items.
+- **Tier 2 (catalog entry pages):** `docs/decisions/INDEX.md` and `docs/specs/INDEX.md` explain how to query source files with `scripts/list-docs.py`.
 - **Tier 3 (individual files):** Individual ADRs and specification documents,
   loaded only when needed.
 
@@ -24,10 +24,9 @@ parallel branches to reserve a shared next number.
 
 Architecture decisions are recorded as ADRs (this file is an example). Product
 behavior is captured in the system-oriented specification layout defined by
-`ADR-2026-08-22-system-oriented-specifications`. ~~Implementation plans
-(`docs/specs/<slug>/plan.md`) and post-ship notes (`docs/specs/<slug>/notes.md`)
-live alongside specs but are **gitignored** — they are ephemeral working files
-regenerated from the spec as needed, not permanent records.~~
+`ADR-2026-08-22-system-oriented-specifications`. Implementation plans live
+under `docs/plans/<initiative>/` and are durable records linked to their
+requirements and system designs.
 
 > The current specification and plan layout is defined by
 > `ADR-2026-08-22-system-oriented-specifications`. The paragraph above records
@@ -43,7 +42,7 @@ future work must follow.
 
 ## Consequences
 
-- Agents can discover past decisions by reading a small index file, then drill into specific ADRs.
+- Agents can discover past decisions with stable filters, then drill into specific ADRs.
 - No file grows unbounded — each decision is its own file.
 - Knowledge is committed to git and survives across sessions, branches, and agent providers.
 - The `/spec` skill integrates with the decision log (reads in design, writes when a durable decision is needed).

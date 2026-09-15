@@ -141,7 +141,7 @@ export type BudgetPolicy = {
   scopeType: "agent" | "project" | "workspace";
   scopeId: string;
   limitSubcents: number;
-  period: "monthly" | "total";
+  period: "daily" | "monthly" | "yearly" | "total";
   alertThresholdPct: number;
   actionOnExceed: "notify_only" | "pause_agent" | "block_new_tasks";
   createdAt: string;
@@ -202,6 +202,12 @@ export type RoutineRun = {
   linkedTaskId?: string;
   coalescedIntoRunId?: string;
   dispatchFingerprint?: string;
+  // Gap summary measured for the claim that created this run (absent when no
+  // gap was recorded — never a stored zero). See
+  // docs/specs/office/requirements/routine-catch-up.md AC-002.
+  catchUpMissedTicks?: number;
+  catchUpFirstMissedAt?: string;
+  catchUpTruncated?: boolean;
   startedAt?: string;
   completedAt?: string;
   createdAt: string;
@@ -490,6 +496,18 @@ export type {
   AgentRoutingSliceState,
 } from "./routing-types";
 
+// --- Workspace kill switch (pause) types ---
+//
+// Defined in `./pause-types` (kept out of this file to stay under the
+// 600-line cap), same split as routing-types above.
+
+export type {
+  WorkspacePauseRecord,
+  WorkspacePauseStatus,
+  WorkspacePauseSliceState,
+  WorkspacePauseOutcome,
+} from "./pause-types";
+
 import type {
   AgentRouteData,
   AgentRoutePreview,
@@ -501,8 +519,21 @@ import type {
   RunAttemptsState,
   WorkspaceRouting,
 } from "./routing-types";
+import type { WorkspacePauseOutcome, WorkspacePauseSliceState } from "./pause-types";
 
 // --- Slice state & actions ---
+
+/**
+ * One or more refetch types fired together. A single WS event routinely
+ * triggers several types in the same synchronous handler (e.g. `task:<id>`
+ * and `dashboard`); batching them into one trigger object is what lets
+ * `useOfficeRefetch` observe every type instead of only the last write to
+ * survive React's automatic batching of same-tick store updates.
+ */
+export type OfficeRefetchTrigger = {
+  types: string[];
+  timestamp: number;
+};
 
 /**
  * Office collections that belong to one workspace, stored per workspace id
@@ -538,17 +569,18 @@ export type OfficeSliceState = {
     tasks: TasksState;
     meta: OfficeMeta | null;
     isLoading: boolean;
-    // Per-type counters rather than one "last trigger" value: a single WS
-    // handler often fires several distinct types in the same synchronous
-    // call (e.g. `task:${id}` then `dashboard`), and React/Zustand coalesce
-    // those into one render, so a shared last-value field would only ever
-    // let the final type's subscribers see a change. See useOfficeRefetch.
-    refetchTriggers: Record<string, number>;
+    // A single WS handler often fires several distinct types in the same
+    // synchronous call (e.g. `task:${id}` then `dashboard`); batching them
+    // into one OfficeRefetchTrigger object per tick is what lets every
+    // matching subscriber observe its type instead of only the last write
+    // surviving React's automatic batching. See useOfficeRefetch.
+    refetchTrigger: OfficeRefetchTrigger | null;
     routing: RoutingState;
     providerHealth: ProviderHealthSliceState;
     runAttempts: RunAttemptsState;
     agentRouting: AgentRoutingSliceState;
     taskQuorum: TaskQuorumSliceState;
+    pause: WorkspacePauseSliceState;
   };
 };
 
@@ -596,6 +628,14 @@ export type OfficeSliceActions = {
   appendRunAttempt: (runId: string, attempt: RouteAttempt) => void;
   setAgentRouting: (agentId: string, data: AgentRouteData | undefined) => void;
   setTaskQuorum: (taskId: string, quorum: QuorumResponseDTO) => void;
+  beginPauseRequest: () => number;
+  resetPauseState: () => void;
+  applyPauseResponse: (
+    tag: number,
+    responseWorkspaceId: string,
+    activeWorkspaceId: string | null,
+    outcome: WorkspacePauseOutcome,
+  ) => boolean;
 };
 
 export type OfficeSlice = OfficeSliceState & OfficeSliceActions;

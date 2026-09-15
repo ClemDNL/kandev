@@ -82,10 +82,11 @@ vi.mock("@kandev/ui/tooltip", async () => {
 
 import { Pill, type PillOption } from "./task-create-dialog-pill";
 import {
+  branchOptionValue,
   branchToOption,
   computeBranchPlaceholder,
   sortBranches,
-} from "./task-create-dialog-branch-options";
+} from "./branch-picker-options";
 
 const CREATE_REPOSITORY = "Create new repository";
 
@@ -162,7 +163,51 @@ describe("sortBranches", () => {
   });
 });
 
+describe("grouped pill options", () => {
+  it("keeps branch policies before branches even when a branch is selected", async () => {
+    render(
+      <Pill
+        icon={<span aria-hidden="true" />}
+        value="main"
+        placeholder="branch"
+        options={[
+          { value: "main", label: "main", group: "branches", groupLabel: "Branches" },
+          {
+            value: "policy:feature",
+            label: "Feature policy",
+            group: "policies",
+            groupLabel: "Branch policies",
+          },
+        ]}
+        onSelect={vi.fn()}
+        searchPlaceholder="Search branches..."
+        emptyMessage="No branches"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /main/i }));
+    const policies = await screen.findByText("Branch policies");
+    const branches = await screen.findByText("Branches");
+    expect(
+      Boolean(policies.compareDocumentPosition(branches) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+  });
+});
+
 describe("branchToOption keywords", () => {
+  it("uses the qualified value for remote branches", () => {
+    expect(branchOptionValue(remoteBranch("main"))).toBe("origin/main");
+    expect(branchToOption(remoteBranch("main")).value).toBe("origin/main");
+    expect(branchOptionValue(localBranch("main"))).toBe("main");
+  });
+
+  it("tags branch options for the grouped selector", () => {
+    expect(branchToOption(localBranch("main"))).toMatchObject({
+      group: "branches",
+      groupLabel: expect.any(String),
+    });
+  });
+
   function keywords(b: Branch): string[] {
     return branchToOption(b).keywords ?? [];
   }

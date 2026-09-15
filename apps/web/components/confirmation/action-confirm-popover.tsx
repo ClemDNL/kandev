@@ -2,6 +2,7 @@
 
 import { useId, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import { Button } from "@kandev/ui/button";
+import { cn } from "@/lib/utils";
 import {
   Popover,
   PopoverAnchor,
@@ -11,12 +12,16 @@ import {
   PopoverTitle,
 } from "@kandev/ui/popover";
 
+export type ActionConfirmPopoverSize = "default" | "wide";
+
 export type ActionConfirmPopoverProps = {
   open: boolean;
+  size?: ActionConfirmPopoverSize;
   disabled?: boolean;
   anchorRef: RefObject<HTMLElement | null>;
   focusReturnRef?: RefObject<HTMLElement | null>;
   focusBoundaryRef?: RefObject<HTMLElement | null>;
+  restoreFocusOnConfirm?: boolean;
   title: ReactNode;
   description?: ReactNode;
   cancelLabel: ReactNode;
@@ -31,6 +36,10 @@ export type ActionConfirmPopoverProps = {
   onConfirm: () => void | Promise<void>;
 };
 
+export function isActionConfirmationTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest("[data-confirmation-boundary]") !== null;
+}
+
 /**
  * A non-modal confirmation surface for one anchored action.
  *
@@ -40,10 +49,12 @@ export type ActionConfirmPopoverProps = {
  */
 export function ActionConfirmPopover({
   open,
+  size = "default",
   disabled = false,
   anchorRef,
   focusReturnRef,
   focusBoundaryRef,
+  restoreFocusOnConfirm = false,
   title,
   description,
   cancelLabel,
@@ -104,6 +115,7 @@ export function ActionConfirmPopover({
       {/* Radix accepts a null current value at runtime while its public type omits it. */}
       <PopoverAnchor virtualRef={anchorRef as RefObject<HTMLElement>} />
       <ActionConfirmPopoverContent
+        size={size}
         titleId={titleId}
         descriptionId={descriptionId}
         title={title}
@@ -119,6 +131,7 @@ export function ActionConfirmPopover({
         cancelRef={cancelRef}
         focusReturnRef={focusReturnRef}
         focusBoundaryRef={focusBoundaryRef}
+        restoreFocusOnConfirm={restoreFocusOnConfirm}
         confirmedRef={confirmedRef}
         anchorRef={anchorRef}
         onCancel={() => handleOpenChange(false)}
@@ -129,6 +142,7 @@ export function ActionConfirmPopover({
 }
 
 type ActionConfirmPopoverContentProps = {
+  size: ActionConfirmPopoverSize;
   titleId: string;
   descriptionId: string;
   title: ReactNode;
@@ -144,6 +158,7 @@ type ActionConfirmPopoverContentProps = {
   cancelRef: RefObject<HTMLButtonElement | null>;
   focusReturnRef?: RefObject<HTMLElement | null>;
   focusBoundaryRef?: RefObject<HTMLElement | null>;
+  restoreFocusOnConfirm: boolean;
   confirmedRef: { current: boolean };
   anchorRef: RefObject<HTMLElement | null>;
   onCancel: () => void;
@@ -151,6 +166,7 @@ type ActionConfirmPopoverContentProps = {
 };
 
 function ActionConfirmPopoverContent({
+  size,
   titleId,
   descriptionId,
   title,
@@ -166,6 +182,7 @@ function ActionConfirmPopoverContent({
   cancelRef,
   focusReturnRef,
   focusBoundaryRef,
+  restoreFocusOnConfirm,
   confirmedRef,
   anchorRef,
   onCancel,
@@ -181,7 +198,7 @@ function ActionConfirmPopoverContent({
       side="bottom"
       align="end"
       sideOffset={8}
-      className="w-64 gap-3 p-3"
+      className={cn("gap-3 p-3", size === "wide" ? "w-72 max-w-[calc(100vw-1rem)]" : "w-64")}
       onOpenAutoFocus={(event) => {
         event.preventDefault();
         cancelRef.current?.focus();
@@ -197,7 +214,7 @@ function ActionConfirmPopoverContent({
       }}
       onCloseAutoFocus={(event) => {
         event.preventDefault();
-        if (!confirmedRef.current) {
+        if (!confirmedRef.current || restoreFocusOnConfirm) {
           const focusReturnTarget = focusReturnRef?.current ?? null;
           if (isConnected(focusReturnTarget)) focusReturnTarget.focus();
           else if (isConnected(anchorRef.current)) anchorRef.current.focus();
@@ -208,7 +225,12 @@ function ActionConfirmPopoverContent({
       <PopoverHeader>
         <PopoverTitle id={titleId}>{title}</PopoverTitle>
         {description ? (
-          <PopoverDescription id={descriptionId}>{description}</PopoverDescription>
+          <PopoverDescription
+            id={descriptionId}
+            className={size === "wide" ? "text-pretty" : undefined}
+          >
+            {description}
+          </PopoverDescription>
         ) : null}
       </PopoverHeader>
       <div className="flex justify-end gap-2">

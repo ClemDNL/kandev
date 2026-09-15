@@ -88,3 +88,34 @@ user or system outcome.
 
 Use references instead of copied text when another system owns a requirement.
 
+## Cross-surface requirements
+
+Keep one cohesive outcome in its owning system when delivery spans backend and
+frontend code. Include observable desktop, mobile, accessibility, loading,
+failure, and recovery behavior in that requirement when those details affect
+the outcome.
+
+Do not create a UI requirement only because users activate or observe the
+capability through the web application. Create a UI requirement when the UI
+owns an independent presentation or interaction contract that several features
+can use without copying feature state.
+
+Before you add a requirement, search the catalog and the owning system
+documents for the capability and its main nouns:
+
+    python3 scripts/list-docs.py specs --text <capability-term> --format paths
+
+Update the current owner when the new behavior extends the same outcome.
+Create another requirement only when the actor, lifecycle, or contract is
+independent. Keep the system README focused on its boundary instead of adding a
+requirement list.
+
+## Migration quality
+
+Do not use a generic acceptance criterion that points to behavior elsewhere in
+the document. Extract each required behavior into a stable and testable `AC-*`
+criterion.
+
+Do not keep copied `Why`, `What`, scenario, data-model, or API sections after
+their facts move to the correct requirement and design sections. A migration
+wrapper is temporary evidence, not a template for new specifications.

@@ -1,9 +1,11 @@
 package worktree
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/kandev/kandev/internal/repoclone"
 	"github.com/kandev/kandev/internal/task/models"
 )
 
@@ -13,14 +15,17 @@ type SyncProgressStatus string
 const (
 	SyncProgressRunning   SyncProgressStatus = "running"
 	SyncProgressCompleted SyncProgressStatus = "completed"
+	SyncProgressFailed    SyncProgressStatus = "failed"
 )
 
 // SyncProgressEvent reports pre-worktree base-branch synchronization progress.
 type SyncProgressEvent struct {
-	StepName string
-	Status   SyncProgressStatus
-	Output   string
-	Error    string
+	StepName      string
+	Status        SyncProgressStatus
+	Output        string
+	Error         string
+	Warning       string
+	WarningDetail string
 }
 
 // SyncProgressCallback is called when base-branch sync status changes.
@@ -37,6 +42,11 @@ type Worktree struct {
 	// TaskID is the ID of the task this worktree is associated with.
 	// Multiple worktrees can exist for the same task (one per agent session).
 	TaskID string `json:"task_id"`
+
+	// TaskDirName is the stable task-root identity used by filesystem
+	// ownership checks. It remains unchanged when a task environment changes
+	// owners, so it is intentionally not part of the public JSON contract.
+	TaskDirName string `json:"-"`
 
 	// TaskEnvironmentID is the task environment that owns this worktree.
 	// Physical worktree records live on task_environment_repos; sessions
@@ -61,6 +71,17 @@ type Worktree struct {
 
 	// Branch is the Git branch name checked out in this worktree.
 	Branch string `json:"branch"`
+
+	// CleanupHeadOID is the immutable checkout identity captured by the durable
+	// task-cleanup snapshot. It is intentionally internal: ordinary worktree
+	// callers do not need to provide it, while durable cleanup uses it to fail
+	// closed if the recorded path or branch advanced before teardown.
+	CleanupHeadOID string `json:"-"`
+
+	// CleanupHeadOIDUnavailable indicates that the current durable cleanup
+	// snapshot intentionally omitted this worktree's commit identity. It is
+	// internal provenance, so it is rebuilt when a snapshot is loaded.
+	CleanupHeadOIDUnavailable bool `json:"-"`
 
 	// BaseBranch is the branch this worktree was created from.
 	BaseBranch string `json:"base_branch"`
@@ -89,10 +110,9 @@ type Worktree struct {
 	// Shown as collapsible content alongside the user-friendly FetchWarning.
 	FetchWarningDetail string `json:"fetch_warning_detail,omitempty"`
 
-	// BaseBranchFallbackWarning is set when the requested BaseBranch did not
-	// exist in the repository and the worktree was created from a fallback
-	// branch (typically the repository's default_branch) instead. Empty when
-	// the original BaseBranch was used.
+	// BaseBranchFallbackWarning is set when the requested base was unavailable
+	// or could not be refreshed and the worktree used a verified local fallback.
+	// Empty when the requested base was used after a successful refresh.
 	BaseBranchFallbackWarning string `json:"base_branch_fallback_warning,omitempty"`
 
 	// BaseBranchFallbackDetail mirrors FetchWarningDetail: a longer message
@@ -145,6 +165,12 @@ type CreateRequest struct {
 	// recreate a worktree in this mode.
 	ReuseRequired bool
 
+	// AllowBranchReplacement explicitly permits recovery to create a new branch
+	// when the persisted worktree branch no longer exists. It is only set by the
+	// user-selected resume-new-branch action; ordinary resume keeps the original
+	// branch and returns ErrBranchUnrecoverable.
+	AllowBranchReplacement bool
+
 	// TaskTitle is the human-readable task title (optional).
 	// If provided, it will be used to generate semantic worktree/branch names.
 	// The title is sanitized and truncated to 20 characters.
@@ -159,6 +185,15 @@ type CreateRequest struct {
 	// BaseBranch is the branch to base the worktree on (required).
 	// Typically "main" or "master".
 	BaseBranch string
+
+	// RecoveryClaim carries the durable environment authority through the
+	// recovery publication CAS. It is internal state and is never serialized
+	// into a user-facing request.
+	RecoveryClaim *models.TaskEnvironmentRecoveryClaim
+
+	// RecoveryOperationID lets all repository slots in one admission share the
+	// same restart-safe recovery record identity.
+	RecoveryOperationID string
 
 	// FallbackBaseBranch is an optional branch to retry with when BaseBranch
 	// does not exist in the repository. Typically populated with the
@@ -203,6 +238,29 @@ type CreateRequest struct {
 	// authenticated provider seam. Worktree creation must use local/remote-
 	// tracking refs only and must not perform another network operation.
 	RemoteSyncHandled bool
+
+	// RefreshRepository is an optional provider-authenticated refresh deferred
+	// until this request needs to materialize or recreate a worktree. A valid
+	// reusable worktree must bypass it. On success, Create marks the refresh as
+	// handled before selecting local refs.
+	RefreshRepository func(context.Context) error
+
+	// RefreshRepositoryWithState is the typed variant used by managed clones.
+	// Only RemoteRefStateEmpty permits local empty-remote bootstrap; unknown
+	// state remains fail-closed and follows the ordinary refresh rules.
+	RefreshRepositoryWithState func(context.Context) (repoclone.RemoteRefState, error)
+
+	// RemoteRefState is the result of the authenticated remote advertisement
+	// used for this materialization.
+	RemoteRefState repoclone.RemoteRefState
+
+	// These fields are manager-internal state used when a provider refresh
+	// fails after a local base was verified. They keep the original refresh
+	// policy for checkout-branch materialization while preventing a second
+	// unauthenticated base refresh.
+	baseRefreshFallback        bool
+	baseRefreshFallbackWarning string
+	baseRefreshFallbackDetail  string
 
 	// WorktreeID is the ID of an existing worktree to reuse (optional).
 	// If provided and valid, the existing worktree is returned instead of creating a new one.

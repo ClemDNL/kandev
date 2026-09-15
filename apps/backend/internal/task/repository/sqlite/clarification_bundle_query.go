@@ -22,8 +22,10 @@ func (r *Repository) ListUnresolvedClarificationBundles(ctx context.Context, opt
 	}
 
 	drv := r.ro.DriverName()
-	whereExtra, args := clarificationBundleWhereClause(opts)
-	query := clarificationBundleQuery(drv, whereExtra)
+	joinExtra, joinArgs := clarificationSidecarJoin(opts.Sidecar)
+	whereExtra, whereArgs := clarificationBundleWhereClause(opts)
+	args := append(append([]interface{}{}, joinArgs...), whereArgs...)
+	query := clarificationBundleQuery(drv, joinExtra, whereExtra)
 	args = append(args, opts.Limit+1)
 
 	rows, err := r.ro.QueryContext(ctx, r.ro.Rebind(query), args...)
@@ -65,11 +67,46 @@ func clarificationBundleWhereClause(opts models.ListClarificationBundlesOptions)
 		conditions = append(conditions, "(b.created_at > ? OR (b.created_at = ? AND b.pending_id > ?))")
 		args = append(args, opts.CursorCreatedAt, opts.CursorCreatedAt, opts.CursorPendingID)
 	}
+	if predicate, predArgs := clarificationSidecarPredicate(opts.Sidecar); predicate != "" {
+		conditions = append(conditions, predicate)
+		args = append(args, predArgs...)
+	}
 
 	if len(conditions) == 0 {
 		return "", args
 	}
 	return "AND " + strings.Join(conditions, " AND "), args
+}
+
+// clarificationSidecarJoin returns the LEFT JOIN clause that makes one
+// operator's sidecar row addressable as `cs.*` for the predicate below, and
+// its bound arg. Nil returns "" so a caller that never sets Sidecar (every
+// existing MCP caller) leaves the query byte-for-byte unchanged.
+func clarificationSidecarJoin(sidecar *models.ClarificationSidecarFilter) (string, []interface{}) {
+	if sidecar == nil {
+		return "", nil
+	}
+	return "LEFT JOIN clarification_inbox_sidecar cs ON cs.pending_id = b.pending_id AND cs.user_id = ?",
+		[]interface{}{sidecar.UserID}
+}
+
+// clarificationSidecarPredicate implements the needs-you-inbox design's
+// "Persistence" section: Only=false (the main list) keeps a bundle unless
+// this operator's sidecar still hides it right now; Only=true (the hidden
+// enumeration/count) keeps exactly the bundles it is hiding right now. A
+// snooze is "still hidden" only while its expiry is strictly after Now, so an
+// expiry exactly at the current instant is already expired and the bundle
+// reappears.
+func clarificationSidecarPredicate(sidecar *models.ClarificationSidecarFilter) (string, []interface{}) {
+	if sidecar == nil {
+		return "", nil
+	}
+	if sidecar.Only {
+		return "(cs.pending_id IS NOT NULL AND (cs.state = 'dismissed' OR (cs.state = 'snoozed' AND cs.snooze_until > ?)))",
+			[]interface{}{sidecar.Now}
+	}
+	return "(cs.pending_id IS NULL OR NOT (cs.state = 'dismissed' OR (cs.state = 'snoozed' AND cs.snooze_until > ?)))",
+		[]interface{}{sidecar.Now}
 }
 
 // clarificationBundleQuery assembles the bundle-grouping subquery joined to
@@ -106,7 +143,27 @@ func clarificationBundleWhereClause(opts models.ListClarificationBundlesOptions)
 // answer_question_kandev's pre-claim validation already rejects. A bundle
 // admitted here with no resolvable question_id could be listed but could
 // never be answered.
-func clarificationBundleQuery(drv, whereExtra string) string {
+func clarificationBundleQuery(drv, joinExtra, whereExtra string) string {
+	return "SELECT b.pending_id, b.session_id, b.task_id, b.created_at\n" +
+		clarificationBundleTableExpr(drv, joinExtra, whereExtra) +
+		"\nORDER BY b.created_at ASC, b.pending_id ASC\nLIMIT ?"
+}
+
+// clarificationBundleCountQuery is clarificationBundleQuery's aggregate
+// sibling: the same bundle-visibility predicate, unbounded (no ORDER BY, no
+// LIMIT), reduced to a workspace-wide COUNT and the earliest still-hidden
+// snooze expiry. Used only with a Sidecar filter set to Only=true (needs-you-
+// inbox design, "Persistence" and "Data and contracts" hidden_count /
+// next_snooze_expiry).
+func clarificationBundleCountQuery(drv, joinExtra, whereExtra string) string {
+	return "SELECT COUNT(*), MIN(cs.snooze_until)\n" + clarificationBundleTableExpr(drv, joinExtra, whereExtra)
+}
+
+// clarificationBundleTableExpr is the shared FROM/JOIN/WHERE expression both
+// queries above select from. See clarificationBundleQuery's doc comment for
+// what each conjunct means; kept in one place so the count query cannot drift
+// from the page query's notion of "answerable".
+func clarificationBundleTableExpr(drv, joinExtra, whereExtra string) string {
 	pendingIDExpr := dialect.JSONExtract(drv, "m.metadata", "pending_id")
 	statusExpr := dialect.JSONExtract(drv, "m.metadata", "status")
 	questionIDExpr := fmt.Sprintf(
@@ -116,16 +173,16 @@ func clarificationBundleQuery(drv, whereExtra string) string {
 	)
 	notParentQuestion := dialect.ExcludeTruthyMetadataPredicate(drv, "m.metadata", "parent_question")
 	nonTerminalSession := nonTerminalSessionPredicate("m")
+	predicate, orderBy := currentTurnAuthority(drv, "turn_row")
 	currentTurn := fmt.Sprintf(`m.turn_id = (
 			SELECT turn_row.id
 			FROM task_session_turns turn_row
 			WHERE turn_row.task_session_id = m.task_session_id
 			  AND %s
-			ORDER BY turn_row.started_at DESC, turn_row.created_at DESC, turn_row.id DESC
+			ORDER BY %s
 			LIMIT 1
-		  )`, turnAuthorityPredicate(drv, "turn_row"))
+		  )`, predicate, orderBy)
 	return fmt.Sprintf(`
-		SELECT b.pending_id, b.session_id, b.task_id, b.created_at
 		FROM (
 			SELECT
 				%[1]s AS pending_id,
@@ -143,12 +200,11 @@ func clarificationBundleQuery(drv, whereExtra string) string {
 			GROUP BY %[1]s, m.task_session_id
 		) b
 		JOIN tasks t ON t.id = b.task_id
+		%[8]s
 		WHERE b.has_pending = 1
 		  AND b.has_missing_question_id = 0
 		  %[3]s
-		ORDER BY b.created_at ASC, b.pending_id ASC
-		LIMIT ?
-	`, pendingIDExpr, statusExpr, whereExtra, notParentQuestion, nonTerminalSession, currentTurn, questionIDExpr)
+	`, pendingIDExpr, statusExpr, whereExtra, notParentQuestion, nonTerminalSession, currentTurn, questionIDExpr, joinExtra)
 }
 
 // scanClarificationBundleRows scans the bundle rows. The created_at column
@@ -180,7 +236,7 @@ func scanClarificationBundleRows(rows *sql.Rows, isPostgres bool) ([]models.Clar
 }
 
 // visibilityPredicate builds the L1c/L1d three-way disjunction (spec
-// docs/specs/external-question-answering/spec.md, "L1c"/"L1d"): the task's
+// docs/specs/integrations/requirements/external-question-answering.md, "L1c"/"L1d"): the task's
 // workspace_id is empty, names no existing workspace row, or is in the L1a
 // visible set. For an unscoped caller the predicate is satisfied
 // unconditionally, so no clause is added at all.

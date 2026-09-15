@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@kandev/ui/tooltip";
+import { CompositorPulse } from "@kandev/ui/compositor-pulse";
 import { cn } from "@/lib/utils";
 import { TipTapInput } from "./tiptap-input";
 import { ChatInputFocusHint } from "./chat-input-focus-hint";
@@ -19,6 +20,7 @@ import {
   useStablePluginComposerCapability,
 } from "@/lib/plugins/composer-capability";
 import type { PluginComposerCapability } from "@/lib/plugins/types";
+import { useComposerActivity, useComposerFocus } from "./composer-disclosure";
 
 export type ChatInputEditorAreaProps = {
   inputRef: React.RefObject<import("./tiptap-input").TipTapInputHandle | null>;
@@ -139,6 +141,7 @@ function useChatPluginComposer(p: {
   identity: string;
   onSubmit: () => void;
 }): PluginComposerCapability {
+  const focus = useComposerFocus(p.inputRef);
   return useStablePluginComposerCapability(
     {
       insertText: (text) => {
@@ -146,13 +149,13 @@ function useChatPluginComposer(p: {
         if (!editor) return false;
         const insertion = composerInsertionText(text, editor.getCharBefore());
         if (!insertion) return false;
+        focus();
         editor.insertText(insertion, editor.getSelectionStart(), editor.getSelectionEnd());
-        editor.focus();
         return true;
       },
       focus: () => {
         if (!p.inputRef.current) return false;
-        p.inputRef.current.focus();
+        focus();
         return true;
       },
       // Revalidated at call time against the same gate the slot advertises as
@@ -177,6 +180,7 @@ function useChatPluginComposer(p: {
 }
 
 export function ChatInputEditorArea(p: ChatInputEditorAreaProps) {
+  useComposerActivity({ busy: Boolean(p.isEnhancingPrompt) });
   const { t } = useTranslation("chat");
   const { inputRef, value, handleChange, handleSubmitWithReset, inputPlaceholder } = p;
   const { isDisabled, planModeEnabled, planModeAvailable, mcpServers } = p;
@@ -318,13 +322,64 @@ function PromptResultRecoveryArea({ children }: { children?: React.ReactNode }) 
   return <div className="mt-2">{children}</div>;
 }
 
-/** Glow class for the outer wrapper. The pulsing glow lives on the wrapper
- * (not the inner box) because the inner box has `overflow-hidden`, which would
- * clip a child pseudo-element's outer box-shadow. */
+/** Glow class for the absolute pulse target outside the overflow-hidden box. */
 function chatInputGlowClass(isAgentBusy: boolean, isStarting: boolean): string {
   if (isAgentBusy) return "chat-input-glow-running";
   if (isStarting) return "chat-input-glow-starting";
   return "";
+}
+
+function ChatInputGlow({ className }: { className: string }) {
+  if (!className) return null;
+  return (
+    <CompositorPulse
+      aria-hidden
+      data-testid="chat-input-glow"
+      className={className}
+      minimumOpacity={0.4}
+      minimumAtEndpoints
+    />
+  );
+}
+
+function useChatInputDrop(addFiles: (files: File[]) => Promise<void>) {
+  const [isDragging, setIsDragging] = useState(false);
+  const handleDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+  const handleDragEnter = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer.types.includes("Files")) setIsDragging(true);
+  }, []);
+  const handleDragLeave = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const { clientX, clientY } = event;
+    if (
+      clientX <= rect.left ||
+      clientX >= rect.right ||
+      clientY <= rect.top ||
+      clientY >= rect.bottom
+    ) {
+      setIsDragging(false);
+    }
+  }, []);
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDragging(false);
+      const files = Array.from(event.dataTransfer.files).filter(
+        (file) => file.size > 0 || file.type !== "",
+      );
+      if (files.length > 0) void addFiles(files);
+    },
+    [addFiles],
+  );
+  return { handleDragEnter, handleDragLeave, handleDragOver, handleDrop, isDragging };
 }
 
 export function ChatInputBody({
@@ -344,52 +399,13 @@ export function ChatInputBody({
   editorAreaProps,
   promptResultRecovery,
 }: ChatInputBodyProps) {
-  const [isDragging, setIsDragging] = useState(false);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer.types.includes("Files")) {
-      setIsDragging(true);
-    }
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Only set false when leaving the container (not entering a child)
-    const rect = e.currentTarget.getBoundingClientRect();
-    const { clientX, clientY } = e;
-    if (
-      clientX <= rect.left ||
-      clientX >= rect.right ||
-      clientY <= rect.top ||
-      clientY >= rect.bottom
-    ) {
-      setIsDragging(false);
-    }
-  }, []);
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsDragging(false);
-      const files = Array.from(e.dataTransfer.files).filter((f) => f.size > 0 || f.type !== "");
-      if (files.length > 0) {
-        void addFiles(files);
-      }
-    },
-    [addFiles],
-  );
+  const glowClass = chatInputGlowClass(isAgentBusy, isStarting);
+  const hasGlow = Boolean(glowClass);
+  const drop = useChatInputDrop(addFiles);
 
   return (
-    <div className={cn("relative", chatInputGlowClass(isAgentBusy, isStarting))}>
+    <div className={cn("relative", { isolate: hasGlow })}>
+      <ChatInputGlow className={glowClass} />
       <ResizeHandle
         planModeEnabled={planModeEnabled}
         isAgentBusy={isAgentBusy}
@@ -408,12 +424,12 @@ export function ChatInputBody({
           hasClarification && "border-sky-400/50",
           showRequestChangesTooltip && "animate-pulse border-orange-500",
           hasPendingComments && "border-amber-500/50",
-          isDragging && "border-primary ring-1 ring-primary/30",
+          drop.isDragging && "border-primary ring-1 ring-primary/30",
         )}
-        onDragOver={handleDragOver}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        onDragOver={drop.handleDragOver}
+        onDragEnter={drop.handleDragEnter}
+        onDragLeave={drop.handleDragLeave}
+        onDrop={drop.handleDrop}
       >
         <ChatInputFocusHint visible={showFocusHint} />
         <ChatInputContextArea {...contextAreaProps} />

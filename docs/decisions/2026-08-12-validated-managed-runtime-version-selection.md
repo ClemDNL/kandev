@@ -1,10 +1,15 @@
 # ADR-2026-08-12-validated-managed-runtime-version-selection: Validate and Persist Managed Runtime Version Selection
 
-**Status:** accepted (amended 2026-08-21)
+**Status:** accepted (amended 2026-08-21, 2026-08-24, and by 2026-09-07-activate-managed-runtime-defaults)
 **Date:** 2026-08-12
 **Area:** backend, frontend, protocol, workflow
 **Supersedes:**
 [ADR-2026-07-26-user-managed-agent-runtime-updates](2026-07-26-user-managed-agent-runtime-updates.md)
+
+**Amendment:**
+[ADR-2026-09-07](2026-09-07-activate-managed-runtime-defaults.md) limits a
+selection to one shipped default generation. A changed package or default
+activates the new Kandev default before runtime consumers start.
 
 ## Context
 
@@ -51,7 +56,8 @@ Command resolution uses the persisted operator selection when its package
 identity still matches; otherwise it uses the shipped default. Kandev does not
 copy the default into the database. An installation with no explicit selection
 therefore follows newer defaults when Kandev upgrades, while an operator
-selection remains stable until the operator changes or clears it.
+selection remains stable until the operator changes or clears it, unless a
+changed applied default generation resets it before runtime consumers start.
 
 The resulting effective version applies to every Kandev-built ACP command for
 that managed package, including capability probes, utility prompts, local
@@ -87,6 +93,12 @@ removes version-tag drift while preserving npm cache reuse. Explicit previews,
 manual updates, and the bounded stale-metadata retry use online-preferred
 metadata. Kandev accepts that a cold or incomplete npm cache can still place the
 registry on the launch path.
+
+The stale-metadata retry runs cache repair through the `agentctl` instance that
+hosts the npm process. This boundary covers local PC, local Docker, and remote
+SSH runtimes. It preserves the configured registry and the exact selected
+version. [ADR-2026-08-24](2026-08-24-agentctl-local-managed-runtime-cache-repair.md)
+owns the cache-repair placement and security rationale.
 
 A weekly repository workflow compares the shipped defaults with each trusted
 package's stable npm `latest` tag and opens a reviewable PR for changes. It does

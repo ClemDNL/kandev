@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/kandev/kandev/internal/task/models"
 )
 
@@ -146,7 +148,12 @@ func TestPermissionResolutionClaimIgnoresInvalidSQLiteMetadataRows(t *testing.T)
 			}
 			// Simulate a legacy database that predates the JSON expression indexes;
 			// current indexes reject malformed metadata before the claim path runs.
-			for _, index := range []string{"idx_messages_metadata_tool_call_id", "idx_messages_metadata_pending_id"} {
+			for _, index := range []string{
+				"idx_messages_metadata_tool_call_id",
+				"idx_messages_metadata_pending_id",
+				"idx_messages_metadata_pending_id_lookup",
+				"idx_messages_metadata_pending_id_lookup_ordered",
+			} {
 				if _, err := repo.db.Exec("DROP INDEX " + index); err != nil {
 					t.Fatalf("drop %s: %v", index, err)
 				}
@@ -269,6 +276,50 @@ func insertMsgWithType(t *testing.T, repo *Repository, id, sessionID, turnID, ms
 	if err != nil {
 		t.Fatalf("insert message %s: %v", id, err)
 	}
+}
+
+func TestListMessagesPaginatedFiltersUserAuthors(t *testing.T) {
+	repo := newRepoForSessionTests(t)
+	ctx := context.Background()
+	seedForMsgTest(t, repo, "task-filter", "sess-filter", "turn-filter")
+	now := time.Now().UTC()
+	for _, message := range []*models.Message{
+		{ID: "user-1", TaskSessionID: "sess-filter", TaskID: "task-filter", TurnID: "turn-filter", AuthorType: models.MessageAuthorUser, Type: models.MessageTypeMessage, CreatedAt: now},
+		{ID: "agent-1", TaskSessionID: "sess-filter", TaskID: "task-filter", TurnID: "turn-filter", AuthorType: models.MessageAuthorAgent, Type: models.MessageTypeMessage, CreatedAt: now.Add(time.Second)},
+		{ID: "user-2", TaskSessionID: "sess-filter", TaskID: "task-filter", TurnID: "turn-filter", AuthorType: models.MessageAuthorUser, Type: models.MessageTypeMessage, CreatedAt: now.Add(2 * time.Second)},
+	} {
+		require.NoError(t, repo.CreateMessage(ctx, message))
+	}
+
+	page, hasMore, err := repo.ListMessagesPaginated(ctx, "sess-filter", models.ListMessagesOptions{
+		AuthorType: string(models.MessageAuthorUser), Limit: 2,
+	})
+
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Equal(t, []string{"user-1", "user-2"}, messageIDs(page))
+}
+
+func TestListMessagesPaginatedAroundIncludesTarget(t *testing.T) {
+	repo := newRepoForSessionTests(t)
+	ctx := context.Background()
+	seedForMsgTest(t, repo, "task-around", "sess-around", "turn-around")
+	now := time.Now().UTC()
+	for index, id := range []string{"m1", "m2", "m3", "m4"} {
+		require.NoError(t, repo.CreateMessage(ctx, &models.Message{
+			ID: id, TaskSessionID: "sess-around", TaskID: "task-around", TurnID: "turn-around",
+			AuthorType: models.MessageAuthorAgent, Type: models.MessageTypeMessage,
+			CreatedAt: now.Add(time.Duration(index) * time.Second),
+		}))
+	}
+
+	page, hasMore, err := repo.ListMessagesPaginated(ctx, "sess-around", models.ListMessagesOptions{
+		Around: "m2", Limit: 2, Sort: "desc",
+	})
+
+	require.NoError(t, err)
+	require.True(t, hasMore)
+	require.Equal(t, []string{"m3", "m2"}, messageIDs(page))
 }
 
 func TestListMessagesByTurnID(t *testing.T) {
@@ -613,4 +664,39 @@ func ids(msgs []*models.Message) []string {
 		out[i] = m.ID
 	}
 	return out
+}
+
+func TestListMessagesPaginatedAuthorTypesAndTaskFilter(t *testing.T) {
+	repo := newRepoForSessionTests(t)
+	ctx := context.Background()
+	seedForMsgTest(t, repo, "task-page-filters", "session-page-filters", "turn-page-filters")
+	now := time.Now().UTC()
+	seeds := []*models.Message{
+		{ID: "page-user-1", TaskID: "task-page-filters", TaskSessionID: "session-page-filters", TurnID: "turn-page-filters", AuthorType: models.MessageAuthorUser, Type: models.MessageTypeMessage, Content: "u1", CreatedAt: now},
+		{ID: "page-agent-1", TaskID: "task-page-filters", TaskSessionID: "session-page-filters", TurnID: "turn-page-filters", AuthorType: models.MessageAuthorAgent, Type: models.MessageTypeMessage, Content: "a1", CreatedAt: now.Add(time.Second)},
+		{ID: "page-user-2", TaskID: "task-page-filters", TaskSessionID: "session-page-filters", TurnID: "turn-page-filters", AuthorType: models.MessageAuthorUser, Type: models.MessageTypeMessage, Content: "u2", CreatedAt: now.Add(2 * time.Second)},
+	}
+	for _, message := range seeds {
+		if err := repo.CreateMessage(ctx, message); err != nil {
+			t.Fatalf("create %s: %v", message.ID, err)
+		}
+	}
+	page := func(opts models.ListMessagesOptions) []string {
+		t.Helper()
+		opts.Sort = "asc"
+		messages, _, err := repo.ListMessagesPaginated(ctx, "session-page-filters", opts)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := make([]string, 0, len(messages))
+		for _, message := range messages {
+			ids = append(ids, message.ID)
+		}
+		return ids
+	}
+	require.Equal(t, []string{"page-user-1", "page-user-2"}, page(models.ListMessagesOptions{Limit: 10, AuthorTypes: []string{string(models.MessageAuthorUser)}}))
+	require.Equal(t, []string{"page-user-1", "page-agent-1", "page-user-2"}, page(models.ListMessagesOptions{Limit: 10, AuthorTypes: []string{string(models.MessageAuthorUser), string(models.MessageAuthorAgent)}}))
+	require.Equal(t, []string{"page-user-1", "page-user-2"}, page(models.ListMessagesOptions{Limit: 10, AuthorType: string(models.MessageAuthorUser)}))
+	require.Empty(t, page(models.ListMessagesOptions{Limit: 10, TaskID: "task-other"}))
+	require.Len(t, page(models.ListMessagesOptions{Limit: 10, TaskID: "task-page-filters"}), 3)
 }

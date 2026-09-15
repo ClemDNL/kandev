@@ -27,7 +27,7 @@ func (c *Controller) GetAgent(ctx context.Context, id string) (*dto.AgentDTO, er
 	if err != nil {
 		return nil, err
 	}
-	result := toAgentDTO(agent, filterGlobalProfiles(profiles))
+	result := c.toAgentDTO(agent, filterGlobalProfiles(profiles))
 	if err := c.decorateAgentDTO(ctx, &result); err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func (c *Controller) ListAgents(ctx context.Context) (*dto.ListAgentsResponse, e
 		if err != nil {
 			return nil, err
 		}
-		entry := toAgentDTO(agent, filterGlobalProfiles(profiles))
+		entry := c.toAgentDTO(agent, filterGlobalProfiles(profiles))
 		if err := c.decorateAgentDTO(ctx, &entry); err != nil {
 			return nil, err
 		}
@@ -182,7 +182,7 @@ func (c *Controller) CreateAgent(ctx context.Context, req CreateAgentRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	result := toAgentDTO(agent, profiles)
+	result := c.toAgentDTO(agent, profiles)
 	c.applyCapabilityStatus(&result, agent.Name)
 	return &result, nil
 }
@@ -275,10 +275,11 @@ func (c *Controller) createAgentProfiles(ctx context.Context, agentID, displayNa
 }
 
 type UpdateAgentRequest struct {
-	ID            string
-	WorkspaceID   *string
-	SupportsMCP   *bool
-	MCPConfigPath *string
+	ID               string
+	WorkspaceID      *string
+	SupportsMCP      *bool
+	MCPConfigPath    *string
+	MCPConfigPathSet bool
 }
 
 func (c *Controller) UpdateAgent(ctx context.Context, req UpdateAgentRequest) (*dto.AgentDTO, error) {
@@ -292,7 +293,13 @@ func (c *Controller) UpdateAgent(ctx context.Context, req UpdateAgentRequest) (*
 	if req.SupportsMCP != nil {
 		agent.SupportsMCP = *req.SupportsMCP
 	}
-	if req.MCPConfigPath != nil {
+	if req.MCPConfigPathSet {
+		if req.MCPConfigPath == nil {
+			agent.MCPConfigPath = ""
+		} else {
+			agent.MCPConfigPath = *req.MCPConfigPath
+		}
+	} else if req.MCPConfigPath != nil {
 		agent.MCPConfigPath = *req.MCPConfigPath
 	}
 	if err := c.repo.UpdateAgent(ctx, agent); err != nil {
@@ -302,7 +309,7 @@ func (c *Controller) UpdateAgent(ctx context.Context, req UpdateAgentRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	result := toAgentDTO(agent, filterGlobalProfiles(profiles))
+	result := c.toAgentDTO(agent, filterGlobalProfiles(profiles))
 	return &result, nil
 }
 

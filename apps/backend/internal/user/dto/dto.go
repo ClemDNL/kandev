@@ -34,6 +34,7 @@ type UserSettingsDTO struct {
 	PreventAutoStartAgentOnOpen       bool                                `json:"prevent_auto_start_agent_on_open"`
 	UnreadDivider                     bool                                `json:"unread_divider"`
 	AgentGeneratedTaskTitles          bool                                `json:"agent_generated_task_titles"`
+	AutoFocusNewTasks                 bool                                `json:"auto_focus_new_tasks"`
 	MCPTaskAgentProfileDefault        string                              `json:"mcp_task_agent_profile_default"`
 	ShowAnchoredPromptBar             bool                                `json:"show_anchored_prompt_bar"`
 	ShowScrollToLastPrompt            bool                                `json:"show_scroll_to_last_prompt"`
@@ -51,7 +52,12 @@ type UserSettingsDTO struct {
 	SidebarViews                      []models.SidebarView                `json:"sidebar_views"`
 	SidebarActiveViewID               string                              `json:"sidebar_active_view_id"`
 	SidebarDraft                      *models.SidebarViewDraft            `json:"sidebar_draft"`
+	ThreadViews                       []models.ThreadView                 `json:"thread_views"`
+	ThreadActiveViewID                string                              `json:"thread_active_view_id"`
+	ThreadViewDraft                   *models.ThreadViewDraft             `json:"thread_view_draft"`
 	SidebarTaskPrefs                  models.SidebarTaskPrefs             `json:"sidebar_task_prefs"`
+	SidebarTaskColorAutomation        models.SidebarTaskColorAutomation   `json:"sidebar_task_color_automation"`
+	SidebarTaskColors                 map[string]*string                  `json:"sidebar_task_colors"`
 	TaskCreateLastUsed                models.TaskCreateLastUsed           `json:"task_create_last_used"`
 	JiraSavedViews                    json.RawMessage                     `json:"jira_saved_views,omitempty"`
 	JiraTaskPresets                   json.RawMessage                     `json:"jira_task_presets,omitempty"`
@@ -70,9 +76,15 @@ type UserSettingsDTO struct {
 	LastSeenDisplay                   string                              `json:"last_seen_display"`
 	SystemMetricsDisplay              models.SystemMetricsDisplaySettings `json:"system_metrics_display"`
 	AppStatusBarEnabled               bool                                `json:"app_status_bar_enabled"`
+	SidebarHoverEnabled               bool                                `json:"sidebar_hover_enabled"`
+	SidebarHoverDelayMs               int                                 `json:"sidebar_hover_delay_ms"`
+	ResolveSessionHostnames           bool                                `json:"resolve_session_hostnames"`
 	AppStatusBarOrder                 models.AppStatusBarOrder            `json:"app_status_bar_order"`
+	QuickChatTabOrderByWorkspace      map[string][]string                 `json:"quick_chat_tab_order_by_workspace"`
 	KanbanHiddenStepIDs               map[string][]string                 `json:"kanban_hidden_step_ids"`
 	WorkflowIDsWithAutoHideEmptySteps []string                            `json:"workflow_ids_with_auto_hide_empty_steps"`
+	KanbanSort                        string                              `json:"kanban_sort"`
+	KanbanPriorityFilterTokens        []string                            `json:"kanban_priority_filter_tokens"`
 	Revision                          int64                               `json:"revision"`
 	UpdatedAt                         string                              `json:"updated_at"`
 }
@@ -85,6 +97,31 @@ type UserResponse struct {
 type UserSettingsResponse struct {
 	Settings     UserSettingsDTO `json:"settings"`
 	ShellOptions []ShellOption   `json:"shell_options"`
+}
+
+type AgentProfileRecentUseDTO struct {
+	Context    models.AgentProfileRecentUseContext `json:"context"`
+	ProfileIDs []string                            `json:"profile_ids"`
+	Revision   int64                               `json:"revision"`
+	UpdatedAt  string                              `json:"updated_at"`
+}
+
+// FromAgentProfileRecentUse maps the persisted context history to its API
+// representation without exposing the owning user id.
+func FromAgentProfileRecentUse(record *models.AgentProfileRecentUse) AgentProfileRecentUseDTO {
+	if record == nil {
+		return AgentProfileRecentUseDTO{}
+	}
+	return AgentProfileRecentUseDTO{
+		Context:    record.Context,
+		ProfileIDs: append([]string{}, record.ProfileIDs...),
+		Revision:   record.Revision,
+		UpdatedAt:  record.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+type RecordAgentProfileRecentUseRequest struct {
+	AgentProfileID string `json:"agent_profile_id"`
 }
 
 type ShellOption struct {
@@ -111,6 +148,7 @@ type UpdateUserSettingsRequest struct {
 	PreventAutoStartAgentOnOpen       *bool                              `json:"prevent_auto_start_agent_on_open,omitempty"`
 	UnreadDivider                     *bool                              `json:"unread_divider,omitempty"`
 	AgentGeneratedTaskTitles          *bool                              `json:"agent_generated_task_titles,omitempty"`
+	AutoFocusNewTasks                 *bool                              `json:"auto_focus_new_tasks,omitempty"`
 	MCPTaskAgentProfileDefault        *string                            `json:"mcp_task_agent_profile_default,omitempty"`
 	ShowAnchoredPromptBar             *bool                              `json:"show_anchored_prompt_bar,omitempty"`
 	ShowScrollToLastPrompt            *bool                              `json:"show_scroll_to_last_prompt,omitempty"`
@@ -128,7 +166,12 @@ type UpdateUserSettingsRequest struct {
 	SidebarViews                      *[]models.SidebarView              `json:"sidebar_views,omitempty"`
 	SidebarActiveViewID               *string                            `json:"sidebar_active_view_id,omitempty"`
 	SidebarDraft                      NullableSidebarDraft               `json:"sidebar_draft,omitempty"`
+	ThreadViews                       *[]models.ThreadView               `json:"thread_views,omitempty"`
+	ThreadActiveViewID                *string                            `json:"thread_active_view_id,omitempty"`
+	ThreadViewDraft                   NullableThreadViewDraft            `json:"thread_view_draft,omitempty"`
 	SidebarTaskPrefs                  *models.SidebarTaskPrefs           `json:"sidebar_task_prefs,omitempty"`
+	SidebarTaskColorAutomation        *models.SidebarTaskColorAutomation `json:"sidebar_task_color_automation,omitempty"`
+	SidebarTaskColorPatch             *models.SidebarTaskColorPatch      `json:"sidebar_task_color_patch,omitempty"`
 	TaskCreateLastUsed                *models.TaskCreateLastUsed         `json:"task_create_last_used,omitempty"`
 	JiraSavedViews                    NullableRawMessage                 `json:"jira_saved_views,omitempty"`
 	JiraTaskPresets                   NullableRawMessage                 `json:"jira_task_presets,omitempty"`
@@ -147,9 +190,15 @@ type UpdateUserSettingsRequest struct {
 	LastSeenDisplay                   *string                            `json:"last_seen_display,omitempty"`
 	SystemMetricsDisplay              *SystemMetricsDisplaySettingsPatch `json:"system_metrics_display,omitempty"`
 	AppStatusBarEnabled               *bool                              `json:"app_status_bar_enabled,omitempty"`
+	SidebarHoverEnabled               *bool                              `json:"sidebar_hover_enabled,omitempty"`
+	SidebarHoverDelayMs               *int                               `json:"sidebar_hover_delay_ms,omitempty"`
+	ResolveSessionHostnames           *bool                              `json:"resolve_session_hostnames,omitempty"`
 	AppStatusBarOrder                 *models.AppStatusBarOrder          `json:"app_status_bar_order,omitempty"`
+	QuickChatTabOrderByWorkspace      *map[string][]string               `json:"quick_chat_tab_order_by_workspace,omitempty"`
 	KanbanHiddenStepIDs               *map[string][]string               `json:"kanban_hidden_step_ids,omitempty"`
 	WorkflowIDsWithAutoHideEmptySteps *[]string                          `json:"workflow_ids_with_auto_hide_empty_steps,omitempty"`
+	KanbanSort                        *string                            `json:"kanban_sort,omitempty"`
+	KanbanPriorityFilterTokens        *[]string                          `json:"kanban_priority_filter_tokens,omitempty"`
 }
 
 type SystemMetricsDisplaySettingsPatch struct {
@@ -190,6 +239,37 @@ func (n *NullableSidebarDraft) UnmarshalJSON(data []byte) error {
 // nil when the field was omitted, otherwise a pointer to the value (possibly
 // nil when explicitly cleared).
 func (n NullableSidebarDraft) ServiceValue() **models.SidebarViewDraft {
+	if !n.Set {
+		return nil
+	}
+	return &n.Value
+}
+
+// NullableThreadViewDraft preserves the JSON PATCH distinction between an
+// omitted thread_view_draft field and an explicit null value.
+type NullableThreadViewDraft struct {
+	Set   bool
+	Value *models.ThreadViewDraft
+}
+
+// UnmarshalJSON decodes an explicitly supplied Threads draft.
+func (n *NullableThreadViewDraft) UnmarshalJSON(data []byte) error {
+	n.Set = true
+	if string(data) == "null" {
+		n.Value = nil
+		return nil
+	}
+	var value models.ThreadViewDraft
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	n.Value = &value
+	return nil
+}
+
+// ServiceValue returns the service-layer pointer for an omitted or explicit
+// thread draft update.
+func (n NullableThreadViewDraft) ServiceValue() **models.ThreadViewDraft {
 	if !n.Set {
 		return nil
 	}
@@ -242,6 +322,10 @@ func FromUser(user *models.User) UserDTO {
 // FromUserSettings maps a settings model to its API DTO, normalizing enum
 // fields (startup page, MCP default, LSP location) to canonical values.
 func FromUserSettings(settings *models.UserSettings) UserSettingsDTO {
+	automaticColors := settings.SidebarTaskColorAutomation
+	if automaticColors.Rules == nil {
+		automaticColors.Rules = []models.SidebarTaskColorRule{}
+	}
 	return UserSettingsDTO{
 		UserID:                            settings.UserID,
 		WorkspaceID:                       settings.WorkspaceID,
@@ -262,6 +346,7 @@ func FromUserSettings(settings *models.UserSettings) UserSettingsDTO {
 		PreventAutoStartAgentOnOpen:       settings.PreventAutoStartAgentOnOpen,
 		UnreadDivider:                     settings.UnreadDivider,
 		AgentGeneratedTaskTitles:          settings.AgentGeneratedTaskTitles,
+		AutoFocusNewTasks:                 settings.AutoFocusNewTasks,
 		MCPTaskAgentProfileDefault:        models.NormalizeMCPTaskAgentProfileDefault(settings.MCPTaskAgentProfileDefault),
 		ShowAnchoredPromptBar:             settings.ShowAnchoredPromptBar,
 		ShowScrollToLastPrompt:            settings.ShowScrollToLastPrompt,
@@ -279,7 +364,12 @@ func FromUserSettings(settings *models.UserSettings) UserSettingsDTO {
 		SidebarViews:                      settings.SidebarViews,
 		SidebarActiveViewID:               settings.SidebarActiveViewID,
 		SidebarDraft:                      settings.SidebarDraft,
+		ThreadViews:                       settings.ThreadViews,
+		ThreadActiveViewID:                settings.ThreadActiveViewID,
+		ThreadViewDraft:                   settings.ThreadViewDraft,
 		SidebarTaskPrefs:                  settings.SidebarTaskPrefs,
+		SidebarTaskColorAutomation:        automaticColors,
+		SidebarTaskColors:                 models.CloneSidebarTaskColors(settings.SidebarTaskColors),
 		TaskCreateLastUsed:                settings.TaskCreateLastUsed,
 		JiraSavedViews:                    settings.JiraSavedViews,
 		JiraTaskPresets:                   settings.JiraTaskPresets,
@@ -298,9 +388,15 @@ func FromUserSettings(settings *models.UserSettings) UserSettingsDTO {
 		LastSeenDisplay:                   models.NormalizeLastSeenDisplay(settings.LastSeenDisplay),
 		SystemMetricsDisplay:              settings.SystemMetricsDisplay,
 		AppStatusBarEnabled:               settings.AppStatusBarEnabled,
+		SidebarHoverEnabled:               settings.SidebarHoverEnabled,
+		SidebarHoverDelayMs:               settings.SidebarHoverDelayMs,
+		ResolveSessionHostnames:           settings.ResolveSessionHostnames,
 		AppStatusBarOrder:                 settings.AppStatusBarOrder,
+		QuickChatTabOrderByWorkspace:      settings.QuickChatTabOrderByWorkspace,
 		KanbanHiddenStepIDs:               settings.KanbanHiddenStepIDs,
 		WorkflowIDsWithAutoHideEmptySteps: append([]string{}, settings.WorkflowIDsWithAutoHideEmptySteps...),
+		KanbanSort:                        settings.KanbanSort,
+		KanbanPriorityFilterTokens:        append([]string{}, settings.KanbanPriorityFilterTokens...),
 		Revision:                          settings.Revision,
 		UpdatedAt:                         settings.UpdatedAt.Format(time.RFC3339),
 	}

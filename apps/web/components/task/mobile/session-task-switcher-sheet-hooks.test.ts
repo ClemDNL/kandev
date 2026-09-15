@@ -8,7 +8,10 @@ import {
   selectTaskFromSheet,
 } from "./session-task-switcher-sheet-selection";
 import type { TaskPendingAction, TaskSession } from "@/lib/types/http";
-import { useSheetArchiveActions } from "./session-task-switcher-sheet-hooks";
+import {
+  loadWorkspaceTaskSessions,
+  useSheetArchiveActions,
+} from "./session-task-switcher-sheet-hooks";
 
 type SheetTask = Parameters<typeof toSheetItem>[0];
 type SheetCtx = Parameters<typeof toSheetItem>[1];
@@ -66,7 +69,9 @@ describe("toSheetItem", () => {
   it("preserves the archived marker for projected rows", () => {
     expect(toSheetItem(task({ isArchived: true }), emptyCtx()).isArchived).toBe(true);
   });
+});
 
+describe("toSheetItem status", () => {
   it("reads pending permission from the task status summary", () => {
     const item = toSheetItem(
       task({
@@ -151,6 +156,34 @@ describe("toSheetItem", () => {
         dismissedAgentErrors: { "session-1": "older-error" },
       }).agentErrorMessage,
     ).toBe(ERROR_PREVIEW);
+  });
+});
+
+// @covers AC-INTEGRATIONS-GITHUB-PR-MERGE-QUEUE-002.10
+describe("toSheetItem automation indicators", () => {
+  it("carries bounded automation indicators onto the mobile sheet row", () => {
+    const item = toSheetItem(
+      task({
+        statusSummary: {
+          revision: 1,
+          updated_at: UPDATED_AT,
+          pull_request: {
+            number: 42,
+            state: "open",
+            auto_fix_enabled: true,
+            auto_merge_enabled: true,
+          },
+        },
+      }),
+      emptyCtx(),
+    );
+
+    expect(item.prInfo).toEqual({
+      number: 42,
+      state: "Open",
+      autoFixEnabled: true,
+      autoMergeEnabled: true,
+    });
   });
 });
 
@@ -273,6 +306,19 @@ describe("selectPendingTaskFromSheet", () => {
     expect(setActiveTask).toHaveBeenCalledWith(taskId);
     expect(navigate).toHaveBeenCalledWith(taskId);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("loadWorkspaceTaskSessions", () => {
+  it("keeps workspace recovery successful when task-session loading fails", async () => {
+    const sessions = await loadWorkspaceTaskSessions(
+      vi.fn(async () => {
+        throw new Error("session read failed");
+      }),
+      "task-1",
+    );
+
+    expect(sessions).toEqual([]);
   });
 });
 

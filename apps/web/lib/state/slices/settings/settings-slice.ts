@@ -8,6 +8,10 @@ import {
   type SettingsSlice,
   type SettingsSliceState,
 } from "./types";
+import {
+  mergeAgentProfileRecentUseState,
+  type AgentProfileRecentUseState,
+} from "@/lib/agent-profile-recent-use";
 
 export const defaultSettingsState: SettingsSliceState = {
   executors: { items: [] },
@@ -31,6 +35,7 @@ export const defaultSettingsState: SettingsSliceState = {
   settingsData: { executorsLoaded: false, agentsLoaded: false },
   sleepInhibition: { response: null, loaded: false, loading: false, error: false },
   userSettings: createDefaultUserSettings(),
+  agentProfileRecentUse: { records: {}, loaded: false },
 };
 
 type ImmerSet = Parameters<
@@ -278,6 +283,32 @@ function createCoreActions(
   };
 }
 
+function createAgentProfileRecentUseActions(
+  set: ImmerSet,
+): Pick<SettingsSlice, "setAgentProfileRecentUse" | "applyAgentProfileRecentUse"> {
+  return {
+    setAgentProfileRecentUse: (state) =>
+      set((draft) => {
+        draft.agentProfileRecentUse = mergeAgentProfileRecentUseState(
+          draft.agentProfileRecentUse as unknown as AgentProfileRecentUseState,
+          state,
+        ) as unknown as typeof draft.agentProfileRecentUse;
+      }),
+    applyAgentProfileRecentUse: (context, record) =>
+      set((draft) => {
+        const current = draft.agentProfileRecentUse.records[context];
+        if (!current || record.revision >= current.revision) {
+          draft.agentProfileRecentUse.records[context] = {
+            profileIds: [...record.profileIds],
+            revision: record.revision,
+            updatedAt: record.updatedAt,
+          };
+        }
+        draft.agentProfileRecentUse.loaded = true;
+      }),
+  };
+}
+
 function createSleepInhibitionActions(
   set: ImmerSet,
 ): Pick<
@@ -318,6 +349,7 @@ function createSecretAndSpriteActions(
   | "setSpritesLoading"
   | "removeSpritesInstance"
   | "setNotificationProviders"
+  | "setAppriseAvailable"
   | "setNotificationProvidersLoading"
 > {
   return {
@@ -368,9 +400,15 @@ function createSecretAndSpriteActions(
       set((draft) => {
         draft.notificationProviders.items = state.items;
         draft.notificationProviders.events = state.events;
-        draft.notificationProviders.appriseAvailable = state.appriseAvailable;
+        if (state.appriseAvailable !== undefined) {
+          draft.notificationProviders.appriseAvailable = state.appriseAvailable;
+        }
         draft.notificationProviders.loaded = state.loaded;
         draft.notificationProviders.loading = state.loading;
+      }),
+    setAppriseAvailable: (available) =>
+      set((draft) => {
+        draft.notificationProviders.appriseAvailable = available;
       }),
     setNotificationProvidersLoading: (loading) =>
       set((draft) => {
@@ -387,6 +425,7 @@ export const createSettingsSlice: StateCreator<
 > = (set) => ({
   ...defaultSettingsState,
   ...createCoreActions(set),
+  ...createAgentProfileRecentUseActions(set),
   ...createSleepInhibitionActions(set),
   ...createInstallJobActions(set),
   ...createAgentUpdateJobActions(set),

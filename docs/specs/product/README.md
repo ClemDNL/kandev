@@ -18,3 +18,12 @@ The expected subjects are:
 System-specific behavior belongs in the owning system under `requirements/`.
 Technical implementation belongs in `system-design/`.
 
+## Find product documents
+
+Run the catalog command to find the current product documents:
+
+    python3 scripts/list-docs.py specs --kind product --format markdown
+
+These documents form the current proposed product baseline. They synthesize
+the existing system specifications, ADRs, and public documentation. Statements
+marked as open questions still need explicit product confirmation.

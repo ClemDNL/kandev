@@ -287,7 +287,7 @@ var ValidProjectStatuses = map[ProjectStatus]bool{
 }
 
 // CostContractVersion is the in-band activation point for the cache-split /
-// cost-provenance / turn-attribution columns (docs/specs/office/costs.md).
+// cost-provenance / turn-attribution columns (docs/specs/office/requirements/costs.md).
 // The Rill cost extract has no schema versioning of its own, so a row
 // written under a prior contract is distinguished by comparing
 // cost_contract_version, not by a date an analyst has to be told out of
@@ -332,7 +332,7 @@ const CostContractVersion int64 = 3
 // turn. The JSON cost-list representation includes this field as null so API
 // consumers can make the same distinction. NULL is never backfilled to 0;
 // TokensCachedIn keeps its original read+write sum semantics on every row so
-// existing consumers of that column are unaffected. See docs/specs/office/costs.md.
+// existing consumers of that column are unaffected. See docs/specs/office/requirements/costs.md.
 type CostEvent struct {
 	ID                        string      `json:"id" db:"id"`
 	SessionID                 string      `json:"session_id" db:"session_id"`
@@ -375,6 +375,25 @@ type BudgetPolicy struct {
 	ActionOnExceed    BudgetActionOnExceed `json:"action_on_exceed" db:"action_on_exceed"`
 	CreatedAt         time.Time            `json:"created_at" db:"created_at"`
 	UpdatedAt         time.Time            `json:"updated_at" db:"updated_at"`
+	// Revision identifies which immutable set of the fields above a budget
+	// claim was evaluated against (REQ-OFFICE-COSTS-003). Server-assigned:
+	// starts at 1 and increases by exactly 1 on each successful update.
+	Revision int64 `json:"revision" db:"revision"`
+}
+
+// SpendWindow reports one scope's priced spend and degradation state for a
+// single [start, before) window, in one query round-trip. Shared between
+// internal/office/repository/sqlite (the query implementations) and
+// internal/office/costs (the Repository interface and EvaluatePreLaunch),
+// so neither package needs to import the other's package for this one
+// return type. AC-OFFICE-BUDGET-002.10/.15, REQ-OFFICE-BUDGET-004.
+type SpendWindow struct {
+	// PricedSubcents excludes any event whose cost_source is 'unpriced'
+	// (AC-OFFICE-BUDGET-004.1); a NULL cost_source is treated as priced.
+	PricedSubcents int64
+	// Degraded is true when the window contains at least one unpriced
+	// event, determined from cost_source, never from estimated.
+	Degraded bool
 }
 
 // Run represents a run queue entry.
@@ -410,10 +429,36 @@ type Run struct {
 	// SummaryInjected is the continuation-summary content prepended
 	// to the prompt at dispatch time, snapshot for inspection. Empty
 	// when no summary was injected (today: every run, until PR 2).
-	SummaryInjected string     `json:"summary_injected,omitempty" db:"summary_injected"`
-	RequestedAt     time.Time  `json:"requested_at" db:"requested_at"`
-	ClaimedAt       *time.Time `json:"claimed_at" db:"claimed_at"`
-	FinishedAt      *time.Time `json:"finished_at" db:"finished_at"`
+	SummaryInjected string `json:"summary_injected,omitempty" db:"summary_injected"`
+	// ContinuationScope is the continuation-summary scope key
+	// (ContinuationScopeForRun's output) computed once at run creation
+	// and persisted here so every later reader/writer of this run's
+	// continuation summary uses the same value. Computing this at
+	// creation time — before any wakeup can coalesce into this row —
+	// closes a race where a routine wakeup patches context_snapshot
+	// after claim but a re-derivation against the freshly re-fetched
+	// row would disagree with the derivation the claiming scheduler is
+	// still holding in memory.
+	ContinuationScope string `json:"continuation_scope,omitempty" db:"continuation_scope"`
+	// WakeWaveKey and WakeWaveString are the completion-wave identity
+	// (parent-wake-wave-identity): both set together, only for
+	// task_children_completed runs, from one derivation per queued run.
+	// WakeWaveKey is the digest idx_run_wake_wave indexes; WakeWaveString
+	// is the plain string the backstop's candidate query compares. Empty
+	// for every other run reason and for every pre-upgrade row.
+	WakeWaveKey    string     `json:"wake_wave_key,omitempty" db:"wake_wave_key"`
+	WakeWaveString string     `json:"wake_wave_string,omitempty" db:"wake_wave_string"`
+	RequestedAt    time.Time  `json:"requested_at" db:"requested_at"`
+	ClaimedAt      *time.Time `json:"claimed_at" db:"claimed_at"`
+	FinishedAt     *time.Time `json:"finished_at" db:"finished_at"`
+
+	// Outcome records why a finished run ended (docs/specs/
+	// task-delivery-ledger/spec.md, "Office run outcome"): one of eight
+	// values on the finished path, NULL on failed and on every
+	// pre-activation row. Pointer-typed so StructScan reads the NULL
+	// every pre-activation row carries, same idiom as the provider-
+	// routing columns below.
+	Outcome *string `json:"outcome,omitempty" db:"outcome"`
 
 	// Provider-routing columns (office-provider-routing spec). All
 	// optional and ignored when workspace routing is disabled. The TEXT
@@ -452,6 +497,13 @@ type Run struct {
 	// EarliestRetryAt is the earliest moment a parked run should be re-
 	// resolved. Set only when at least one degraded route is auto-retryable.
 	EarliestRetryAt *time.Time `json:"earliest_retry_at,omitempty" db:"earliest_retry_at"`
+
+	// CausationID is copied from the agent_wakeup_requests row that
+	// created this run (REQ-OFFICE-LOOP-LIVENESS-002). "" means
+	// uncorrelated — either a legacy pre-migration row or a run created
+	// off a wake that never carried an id. Never a join/group-by key
+	// without excluding "" first.
+	CausationID string `json:"causation_id,omitempty" db:"causation_id"`
 }
 
 // RouteAttempt records one provider attempt inside a Run. Each fallback
@@ -552,19 +604,42 @@ type RoutineTrigger struct {
 }
 
 // RoutineRun represents a single run of a routine.
+//
+// CatchUpMissedTicks/CatchUpFirstMissedAt/CatchUpTruncated are the gap
+// summary measured for the claim that created this run — written once
+// at creation and never modified afterward (AC-OFFICE-ROUTINE-CATCHUP-002.10).
+// CatchUpMissedTicks is nil when no gap summary was recorded; per
+// AC-002.3, absence is never represented as a stored zero, so a nil
+// check (not a zero check) is the presence test.
 type RoutineRun struct {
-	ID                  string           `json:"id" db:"id"`
-	RoutineID           string           `json:"routine_id" db:"routine_id"`
-	TriggerID           string           `json:"trigger_id" db:"trigger_id"`
-	Source              string           `json:"source" db:"source"`
-	Status              RoutineRunStatus `json:"status" db:"status"`
-	TriggerPayload      string           `json:"trigger_payload" db:"trigger_payload"`
-	LinkedTaskID        string           `json:"linked_task_id" db:"linked_task_id"`
-	CoalescedIntoRunID  string           `json:"coalesced_into_run_id" db:"coalesced_into_run_id"`
-	DispatchFingerprint string           `json:"dispatch_fingerprint" db:"dispatch_fingerprint"`
-	StartedAt           *time.Time       `json:"started_at" db:"started_at"`
-	CompletedAt         *time.Time       `json:"completed_at" db:"completed_at"`
-	CreatedAt           time.Time        `json:"created_at" db:"created_at"`
+	ID                   string           `json:"id" db:"id"`
+	RoutineID            string           `json:"routine_id" db:"routine_id"`
+	TriggerID            string           `json:"trigger_id" db:"trigger_id"`
+	Source               string           `json:"source" db:"source"`
+	Status               RoutineRunStatus `json:"status" db:"status"`
+	TriggerPayload       string           `json:"trigger_payload" db:"trigger_payload"`
+	LinkedTaskID         string           `json:"linked_task_id" db:"linked_task_id"`
+	CoalescedIntoRunID   string           `json:"coalesced_into_run_id" db:"coalesced_into_run_id"`
+	DispatchFingerprint  string           `json:"dispatch_fingerprint" db:"dispatch_fingerprint"`
+	CatchUpMissedTicks   *int             `json:"catch_up_missed_ticks,omitempty" db:"catch_up_missed_ticks"`
+	CatchUpFirstMissedAt *time.Time       `json:"catch_up_first_missed_at,omitempty" db:"catch_up_first_missed_at"`
+	CatchUpTruncated     bool             `json:"catch_up_truncated" db:"catch_up_truncated"`
+	StartedAt            *time.Time       `json:"started_at" db:"started_at"`
+	CompletedAt          *time.Time       `json:"completed_at" db:"completed_at"`
+	CreatedAt            time.Time        `json:"created_at" db:"created_at"`
+	// SkipReason carries exactly one value today, "workspace_paused",
+	// distinguishing a workspace-pause skip from every other skip cause
+	// (e.g. skip_if_active concurrency). Empty for a run not skipped by a
+	// pause.
+	SkipReason string `json:"skip_reason" db:"skip_reason"`
+	// PauseID names the office_workspace_pauses row that blocked this
+	// fire. Empty when SkipReason is empty.
+	PauseID string `json:"pause_id" db:"pause_id"`
+	// CausationID is minted once per fire in dispatchRoutineRun
+	// (REQ-OFFICE-LOOP-LIVENESS-002) — the origin id every wakeup
+	// request and run this fire produces carries forward. "" only for
+	// rows written before this feature.
+	CausationID string `json:"causation_id,omitempty" db:"causation_id"`
 }
 
 // ApprovalType constants for approval request types.
@@ -657,6 +732,11 @@ const (
 const (
 	DecisionApproved         = "approved"
 	DecisionChangesRequested = "changes_requested"
+	// DecisionRejected is the agent-path verdict literal
+	// (engine.DecisionRejected) for the same semantic as
+	// DecisionChangesRequested — the quorum engine already treats them as
+	// synonyms (isRejectionVerdict in internal/workflow/engine/quorum.go).
+	DecisionRejected = "rejected"
 
 	DeciderTypeUser  = "user"
 	DeciderTypeAgent = "agent"

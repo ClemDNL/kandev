@@ -98,14 +98,31 @@ function isUnsettledStartupModelsPayload(
   );
 }
 
+// activeModel only ever records a selection the user made in this store, so a
+// payload reporting that model is the provider confirming that selection rather
+// than stale resume state. The cached session metadata still names the
+// pre-switch model until a session update lands, so it cannot arbitrate here.
+function payloadConfirmsUserSelection(
+  state: AppState,
+  sessionId: string,
+  payload: SessionModelsPayload,
+): boolean {
+  const selected = state.activeModel?.bySessionId?.[sessionId];
+  return !!selected && resolveCurrentModelId(payload) === selected;
+}
+
 function shouldHydrateSessionModelsPayload(
   payload: SessionModelsPayload,
   matchesPersisted: boolean,
+  confirmsUserSelection: boolean,
   unsettledStartup: boolean,
 ): boolean {
   // Two-layer defense: the backend gates unsettled startup events, while this
   // barrier protects reconnects where the client session state lags.
-  return payload.config_options_settled === true || (matchesPersisted && !unsettledStartup);
+  return (
+    payload.config_options_settled === true ||
+    ((matchesPersisted || confirmsUserSelection) && !unsettledStartup)
+  );
 }
 
 function shouldUsePersistedRuntimeConfig(hydrated: boolean, unsettledStartup: boolean): boolean {
@@ -155,6 +172,35 @@ function shouldPreserveExistingConfigOptions(
   return !!existing && existing.configOptions.length > 0;
 }
 
+function shouldPreserveExistingModels(
+  state: AppState,
+  sessionId: string,
+  payload: SessionModelsPayload,
+): boolean {
+  if (payload.models?.length || payload.config_options_settled === true) return false;
+  const existing = state.sessionModels.bySessionId[sessionId];
+  return !!existing && existing.models.length > 0;
+}
+
+function shouldSkipModelsUpdate(resolved: { isEmpty: boolean; populated: boolean }): boolean {
+  return resolved.isEmpty && resolved.populated;
+}
+
+function resolveModels(
+  preserve: boolean,
+  existing: SessionModelsState["bySessionId"][string]["models"] | undefined,
+  acpModels: SessionModelsPayload["models"],
+): SessionModelsState["bySessionId"][string]["models"] {
+  if (preserve && existing) return existing;
+  return (acpModels ?? []).map((model) => ({
+    modelId: model.model_id,
+    name: model.name,
+    description: model.description,
+    usageMultiplier: model.usage_multiplier,
+    meta: model.meta,
+  }));
+}
+
 function debugModelsUpdate(
   state: AppState,
   sessionId: string,
@@ -164,6 +210,7 @@ function debugModelsUpdate(
     isEmpty: boolean;
     populated: boolean;
     preserveConfigOptions: boolean;
+    preserveModels: boolean;
   },
 ) {
   if (!isDebug()) return;
@@ -179,8 +226,9 @@ function debugModelsUpdate(
     existingCurrentModelId: existing?.currentModelId ?? "",
     existingModelsLen: existing?.models.length ?? 0,
     existingConfigOptionIds: (existing?.configOptions ?? []).map((o) => o.id),
-    willSkip: resolved.isEmpty && resolved.populated,
+    willSkip: shouldSkipModelsUpdate(resolved),
     preserveConfigOptions: resolved.preserveConfigOptions,
+    preserveModels: resolved.preserveModels,
   });
 }
 
@@ -244,6 +292,7 @@ function resolveModelsUpdatedState(
   isEmpty: boolean;
   populated: boolean;
   preserveConfigOptions: boolean;
+  preserveModels: boolean;
   existingEntry: SessionModelsState["bySessionId"][string] | undefined;
   existingFallback: string | undefined;
 } {
@@ -262,6 +311,7 @@ function resolveModelsUpdatedState(
     ),
     populated: hasPopulatedModels(state, sessionId),
     preserveConfigOptions: shouldPreserveExistingConfigOptions(state, sessionId, payload),
+    preserveModels: shouldPreserveExistingModels(state, sessionId, payload),
     existingEntry,
     existingFallback,
   };
@@ -312,7 +362,15 @@ export function registerSessionModelsHandlers(store: StoreApi<AppState>): WsHand
       );
       const persisted = usePersistedRuntime ? persistedRuntimeConfig(state, sessionId) : {};
       const matchesPersisted = payloadMatchesPersistedRuntime(payload, persisted);
-      if (shouldHydrateSessionModelsPayload(payload, matchesPersisted, unsettledStartup)) {
+      const confirmsUserSelection = payloadConfirmsUserSelection(state, sessionId, payload);
+      if (
+        shouldHydrateSessionModelsPayload(
+          payload,
+          matchesPersisted,
+          confirmsUserSelection,
+          unsettledStartup,
+        )
+      ) {
         hydrated.add(sessionId);
       }
       const pendingRuntime = shouldUsePersistedRuntimeConfig(
@@ -323,7 +381,7 @@ export function registerSessionModelsHandlers(store: StoreApi<AppState>): WsHand
         : {};
       const resolved = resolveModelsUpdatedState(state, sessionId, payload, pendingRuntime);
       debugModelsUpdate(state, sessionId, payload, resolved);
-      if (resolved.isEmpty && resolved.populated) {
+      if (shouldSkipModelsUpdate(resolved)) {
         return;
       }
       clearStaleContextWindow(state, sessionId, resolved.currentModelId);
@@ -336,17 +394,16 @@ export function registerSessionModelsHandlers(store: StoreApi<AppState>): WsHand
         resolved.currentModelId,
       );
       const configOptionsSettled = resolvedConfigOptionsSettled(payload, resolved.existingEntry);
+      const models = resolveModels(
+        resolved.preserveModels,
+        resolved.existingEntry?.models,
+        acpModels,
+      );
 
       state.setSessionModels(sessionId, {
         currentModelId: resolved.currentModelId,
         fallbackModel: resolved.existingFallback,
-        models: acpModels.map((m) => ({
-          modelId: m.model_id,
-          name: m.name,
-          description: m.description,
-          usageMultiplier: m.usage_multiplier,
-          meta: m.meta,
-        })),
+        models,
         configOptions,
         ...(configOptionsSettled === undefined ? {} : { configOptionsSettled }),
         configBaseline:

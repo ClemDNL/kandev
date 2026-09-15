@@ -111,12 +111,19 @@ type Host interface {
 	// prompt to a task session.
 	Messages() MessageReader
 
-	// InvokeUtilityAgent runs a one-shot, non-interactive completion using
-	// the operator-configured "utility agent" (Settings > System) and returns
-	// its text. Requires the `agent_invoke` capability. Returns a gRPC
-	// FailedPrecondition error when no utility agent is configured, so a
-	// plugin needs no API key of its own.
-	InvokeUtilityAgent(ctx context.Context, prompt string) (string, error)
+	// InvokeUtilityAgent runs a one-shot, non-interactive completion. With no
+	// options, or an empty ProfileID, it uses the platform default utility
+	// profile. A non-empty ProfileID selects that profile for this call only.
+	// Requires the `agent_invoke` capability and returns gRPC FailedPrecondition
+	// for a missing or ineligible profile.
+	InvokeUtilityAgent(ctx context.Context, prompt string, options ...UtilityAgentOptions) (string, error)
+}
+
+// UtilityAgentOptions contains per-call utility completion options. ProfileID
+// is an agent-profile ID, not a utility-agent record ID. An empty value uses
+// the platform default.
+type UtilityAgentOptions struct {
+	ProfileID string
 }
 
 // TaskReader is the accessor behind Host.Tasks(), mirroring the Host data
@@ -138,9 +145,16 @@ type TaskReader interface {
 	Create(ctx context.Context, in CreateTaskInput) (*Task, error)
 
 	// Update mutates a conservative field surface of an existing task
-	// (title/description/state/workflow_step_id) and returns the updated task.
-	// Requires api_write:tasks.
+	// (title/description/state) and returns the updated task. Requires
+	// api_write:tasks. WorkflowStepID is rejected when present — use Move to
+	// transition a task between workflow steps.
 	Update(ctx context.Context, in UpdateTaskInput) (*Task, error)
+
+	// Move transitions a task to a workflow step through the same path the
+	// board's own move uses (validation, WIP admission, task.moved
+	// publication, auto-start gates, queue reconciliation) — unlike Update,
+	// which rejects a workflow step change. Requires api_write:tasks.
+	Move(ctx context.Context, in MoveTaskInput) (*MoveTaskOutcome, error)
 }
 
 // SessionReader is the read-only accessor behind Host.Sessions(), mirroring
@@ -235,6 +249,9 @@ type PluginOwnedTaskTreeManager interface {
 	// callers must reconcile those ids before retrying the remaining cleanup.
 	Delete(ctx context.Context, rootTaskID string) ([]string, error)
 }
+
+// The third optional Host extension, InteractionHost (pending agent
+// interactions and their responses), lives in interactions.go.
 
 // PluginOwnedTaskTrees returns the optional provenance-safe task-tree manager.
 func PluginOwnedTaskTrees(host Host) (PluginOwnedTaskTreeManager, bool) {
@@ -371,8 +388,15 @@ func (h *grpcHostClient) Repositories() RepositoryReader {
 
 func (h *grpcHostClient) Messages() MessageReader { return grpcMessageReader{client: h.client} }
 
-func (h *grpcHostClient) InvokeUtilityAgent(ctx context.Context, prompt string) (string, error) {
-	resp, err := h.client.InvokeUtilityAgent(ctx, &pluginv1.InvokeUtilityAgentRequest{Prompt: prompt})
+func (h *grpcHostClient) InvokeUtilityAgent(ctx context.Context, prompt string, options ...UtilityAgentOptions) (string, error) {
+	if len(options) > 1 {
+		return "", status.Error(codes.InvalidArgument, "InvokeUtilityAgent accepts at most one options value")
+	}
+	req := &pluginv1.InvokeUtilityAgentWithOptionsRequest{Prompt: prompt}
+	if len(options) == 1 {
+		req.ProfileId = options[0].ProfileID
+	}
+	resp, err := h.client.InvokeUtilityAgentWithOptions(ctx, req)
 	if err != nil {
 		return "", err
 	}
@@ -437,6 +461,14 @@ func (r grpcTaskReader) Update(ctx context.Context, in UpdateTaskInput) (*Task, 
 		return nil, err
 	}
 	return &task, nil
+}
+
+func (r grpcTaskReader) Move(ctx context.Context, in MoveTaskInput) (*MoveTaskOutcome, error) {
+	resp, err := r.client.MoveTask(ctx, in.toProto())
+	if err != nil {
+		return nil, err
+	}
+	return moveTaskOutcomeFromProto(resp)
 }
 
 // grpcSessionReader implements SessionReader on the plugin side.
@@ -697,7 +729,15 @@ func (s *grpcHostServer) EmitEvent(ctx context.Context, req *pluginv1.EmitEventR
 }
 
 func (s *grpcHostServer) InvokeUtilityAgent(ctx context.Context, req *pluginv1.InvokeUtilityAgentRequest) (*pluginv1.InvokeUtilityAgentResponse, error) {
-	text, err := s.impl.InvokeUtilityAgent(ctx, req.GetPrompt())
+	return s.invokeUtilityAgent(ctx, req.GetPrompt())
+}
+
+func (s *grpcHostServer) InvokeUtilityAgentWithOptions(ctx context.Context, req *pluginv1.InvokeUtilityAgentWithOptionsRequest) (*pluginv1.InvokeUtilityAgentResponse, error) {
+	return s.invokeUtilityAgent(ctx, req.GetPrompt(), UtilityAgentOptions{ProfileID: req.GetProfileId()})
+}
+
+func (s *grpcHostServer) invokeUtilityAgent(ctx context.Context, prompt string, options ...UtilityAgentOptions) (*pluginv1.InvokeUtilityAgentResponse, error) {
+	text, err := s.impl.InvokeUtilityAgent(ctx, prompt, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -881,6 +921,17 @@ func (s *grpcHostServer) UpdateTask(ctx context.Context, req *pluginv1.UpdateTas
 	return &pluginv1.UpdateTaskResponse{Task: protoTask}, nil
 }
 
+func (s *grpcHostServer) MoveTask(ctx context.Context, req *pluginv1.MoveTaskRequest) (*pluginv1.MoveTaskResponse, error) {
+	outcome, err := s.impl.Tasks().Move(ctx, moveTaskInputFromProto(req))
+	if err != nil {
+		return nil, err
+	}
+	if outcome == nil {
+		return nil, status.Error(codes.Internal, "MoveTask returned nil outcome")
+	}
+	return outcome.toProto()
+}
+
 func (s *grpcHostServer) SendMessage(ctx context.Context, req *pluginv1.SendMessageRequest) (*pluginv1.SendMessageResponse, error) {
 	dispatch, err := s.impl.Messages().Send(ctx, req.GetTaskId(), req.GetSessionId(), req.GetText())
 	if err != nil {
@@ -966,7 +1017,7 @@ func (UnimplementedHostData) PluginOwnedTaskTrees() PluginOwnedTaskTreeManager {
 // "unimplemented Host extensions" embed both real Host implementations use —
 // so a Host that hasn't wired a utility agent (e.g. a test double) still
 // satisfies the interface, returning gRPC Unimplemented until overridden.
-func (UnimplementedHostData) InvokeUtilityAgent(context.Context, string) (string, error) {
+func (UnimplementedHostData) InvokeUtilityAgent(context.Context, string, ...UtilityAgentOptions) (string, error) {
 	return "", errUnimplementedHostData("utility_agent")
 }
 
@@ -989,6 +1040,10 @@ func (unimplementedTaskReader) Create(context.Context, CreateTaskInput) (*Task, 
 }
 
 func (unimplementedTaskReader) Update(context.Context, UpdateTaskInput) (*Task, error) {
+	return nil, errUnimplementedHostData("tasks")
+}
+
+func (unimplementedTaskReader) Move(context.Context, MoveTaskInput) (*MoveTaskOutcome, error) {
 	return nil, errUnimplementedHostData("tasks")
 }
 

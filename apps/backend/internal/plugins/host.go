@@ -49,10 +49,9 @@ type pluginHost struct {
 	// GetConfig to know which fields are secret (and therefore stored as
 	// vault references to resolve back to cleartext).
 	configSchema map[string]any
-
-	state   *state.Store
-	secrets SecretVault
-	bus     bus.EventBus
+	state        *state.Store
+	secrets      SecretVault
+	bus          bus.EventBus
 
 	// configs reads the plugin's operator-editable config for the ungated
 	// GetConfig RPC. Satisfied by store.Store; nil in tests that build a
@@ -67,6 +66,11 @@ type pluginHost struct {
 	agentProfiles    agentProfileDataSource
 	sessionCodeStats sessionCodeStatsSource
 	messageData      messageDataSource
+	interactionData  interactionDataSource
+	taskPRs          taskPRSource
+	// taskPRsDep resolves the source at read time so a host created before
+	// SetTaskPRSource still observes the late wiring.
+	taskPRsDep func() taskPRSource
 
 	// taskWriter backs the CreateTask/UpdateTask write RPCs (ADR 0043
 	// phase 2, capability api_write:tasks). Wired via SetDataSources like the
@@ -81,22 +85,28 @@ type pluginHost struct {
 	// utilityDeps. nil on a bare test host. See host_write.go.
 	writeDeps func() (taskMessenger, taskStarter)
 
-	// utilityDeps returns the live utility-agent dependencies (ADR 0048) at
-	// call time rather than a spawn-time snapshot. hostUtilityMgr is
-	// constructed late in boot — after StartActivePlugins has already spawned
-	// boot-active plugins — so snapshotting here would strand those hosts with
-	// nil deps and make InvokeUtilityAgent return Unimplemented for their whole
-	// lifetime. Reading live (under Service.mu) lets the later SetUtilityAgent
-	// wiring take effect without a plugin restart. nil on a bare test host.
+	// interactionDeps returns the live interaction responder behind the
+	// api_write:interactions RPCs (ADR 0052). Read live, not snapshotted at
+	// hostForPlugin time, for the same reason as writeDeps: the orchestrator
+	// and the clarification handler are both constructed after boot-active
+	// plugins spawn, so a snapshot would strand those hosts with a nil
+	// responder for their whole lifetime. nil on a bare test host.
+	// See host_interactions.go.
+	interactionDeps func() interactionResponder
+
+	// utilityDeps returns the live utility invocation dependencies at call time
+	// rather than a spawn-time snapshot. The runner is constructed late in boot,
+	// after boot-active plugins can spawn, so reading live lets later wiring take
+	// effect without a plugin restart. nil on a bare test host.
 	// See host_utility.go.
-	utilityDeps func() (utilityAgentSource, utilityRunner)
+	utilityDeps func() (utilityDefaultProfileSource, agentProfileSource, utilityRunner)
 }
 
 var _ pluginsdk.Host = (*pluginHost)(nil)
 
 // permissionDenied builds the gRPC error RemotePlugin/Host RPCs return for
 // an undeclared capability, matching the wire-level message from
-// docs/specs/plugins/spec.md ("Permissions"): "capability '<name>' not
+// docs/specs/plugins/requirements/plugins.md ("Permissions"): "capability '<name>' not
 // declared".
 func permissionDenied(capability string) error {
 	return status.Errorf(codes.PermissionDenied, "capability '%s' not declared", capability)

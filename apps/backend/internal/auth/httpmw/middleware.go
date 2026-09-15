@@ -303,7 +303,11 @@ func BearerToken(r *http.Request) string {
 func isPublicPath(method, path string) bool {
 	switch path {
 	case "/health":
-		// CLI + desktop readiness probes poll before any session can exist.
+		// CLI + desktop liveness probes poll before any session can exist.
+		return method == http.MethodGet
+	case "/ready":
+		// Kubernetes readinessProbe and the e2e fixture poll before any
+		// session can exist, same as /health.
 		return method == http.MethodGet
 	case "/api/v1/features", "/api/v1/app-state":
 		// SPA bootstrap reads; app-state returns the auth-aware boot payload
@@ -333,6 +337,8 @@ func isPublicPath(method, path string) bool {
 		return method == http.MethodPost
 	}
 	switch {
+	case strings.HasPrefix(path, "/api/v1/automations/webhook-bindings/"):
+		return method == http.MethodPost && strings.Count(strings.TrimPrefix(path, "/api/v1/automations/webhook-bindings/"), "/") == 0
 	case strings.HasPrefix(path, "/api/v1/automations/webhook/"):
 		// X-Webhook-Secret, constant-time compared by the handler.
 		return true
@@ -363,6 +369,7 @@ func isPublicPath(method, path string) bool {
 func isDeferredPath(c *gin.Context, path string) bool {
 	switch {
 	case path == "/ws",
+		strings.HasPrefix(path, "/api/v1/plugins/web-apps/runtime/"),
 		strings.HasPrefix(path, "/terminal/"),
 		strings.HasPrefix(path, "/lsp/"),
 		strings.HasPrefix(path, "/vscode/"),

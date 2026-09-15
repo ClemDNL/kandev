@@ -9,11 +9,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@kandev/ui/tabs";
 import { SettingsPageTemplate } from "@/components/settings/settings-page-template";
 import { useResponsiveBreakpoint } from "@/hooks/use-responsive-breakpoint";
 import { useAutoUpdateSettings } from "@/hooks/domains/plugins/use-auto-update-settings";
+import { useIsAdmin } from "@/hooks/domains/auth/use-is-admin";
+import { useFeature } from "@/hooks/domains/features/use-feature";
 import { usePlugins } from "@/hooks/domains/plugins/use-plugins";
 import { usePluginSetupStatus } from "@/hooks/domains/plugins/use-plugin-setup-status";
 import { usePluginUpdates } from "@/hooks/domains/plugins/use-plugin-updates";
 import { InstallPluginDialog } from "./install-plugin-dialog";
 import { MarketplaceBrowser } from "./marketplace-browser";
+import { CanvasMarketplace } from "./canvas-marketplace";
 import { PluginRow, type PluginRowUpdateState } from "./plugin-row";
 import { PluginUpdateStatus } from "./plugin-update-status";
 import { usePluginActions } from "./use-plugin-actions";
@@ -22,11 +25,13 @@ import { settingsActionClassName } from "@/components/settings/settings-control"
 
 /**
  * Operator UI to browse, install, enable, disable, uninstall, and update kandev
- * plugins (docs/specs/plugins/marketplace.md). Gated on the `plugins` feature
+ * plugins (docs/specs/plugins/requirements/marketplace.md). Gated on the `plugins` feature
  * flag by the page-level default export.
  */
 export function PluginsSettings() {
   const { t } = useTranslation();
+  const canManage = useIsAdmin();
+  const canvasesEnabled = useFeature("canvases");
   const { isFinePointer } = useResponsiveBreakpoint();
   const list = usePlugins();
   const actions = usePluginActions();
@@ -67,6 +72,15 @@ export function PluginsSettings() {
           <TabsTrigger value="browse" data-testid="plugins-tab-browse" className="cursor-pointer">
             {t("plugins:tabBrowse")}
           </TabsTrigger>
+          {canvasesEnabled && (
+            <TabsTrigger
+              value="canvases"
+              data-testid="plugins-tab-canvases"
+              className="cursor-pointer"
+            >
+              {t("plugins:tabCanvases")}
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="installed" className="space-y-6">
@@ -75,24 +89,33 @@ export function PluginsSettings() {
             actions={actions}
             autoUpdate={autoUpdate}
             updates={updates}
+            canManage={canManage}
             updateAction={updateAction}
             isFinePointer={isFinePointer}
           />
         </TabsContent>
 
         <TabsContent value="browse">
-          <MarketplaceBrowser onInstallUrl={handleMarketplaceInstall} />
+          <MarketplaceBrowser onInstallUrl={handleMarketplaceInstall} canManage={canManage} />
         </TabsContent>
+
+        {canvasesEnabled && (
+          <TabsContent value="canvases">
+            <CanvasMarketplace />
+          </TabsContent>
+        )}
       </Tabs>
 
-      <InstallPluginDialog
-        open={actions.installOpen}
-        busy={actions.installBusy}
-        error={actions.installError}
-        onOpenChange={actions.setInstallOpen}
-        onSubmitUrl={actions.submitInstallUrl}
-        onSubmitFile={actions.submitInstallFile}
-      />
+      {canManage && (
+        <InstallPluginDialog
+          open={actions.installOpen}
+          busy={actions.installBusy}
+          error={actions.installError}
+          onOpenChange={actions.setInstallOpen}
+          onSubmitUrl={actions.submitInstallUrl}
+          onSubmitFile={actions.submitInstallFile}
+        />
+      )}
     </SettingsPageTemplate>
   );
 }
@@ -101,6 +124,7 @@ type InstalledTabProps = {
   list: ReturnType<typeof usePlugins>;
   actions: ReturnType<typeof usePluginActions>;
   autoUpdate: ReturnType<typeof useAutoUpdateSettings>;
+  canManage: boolean;
   updates: ReturnType<typeof usePluginUpdates>;
   updateAction: ReturnType<typeof usePluginUpdateAction>;
   isFinePointer: boolean;
@@ -112,6 +136,7 @@ function InstalledTab({
   actions,
   autoUpdate,
   updates,
+  canManage,
   updateAction,
   isFinePointer,
 }: InstalledTabProps) {
@@ -119,39 +144,41 @@ function InstalledTab({
 
   return (
     <>
-      <GlobalAutoUpdateToggle settings={autoUpdate} />
+      {canManage && <GlobalAutoUpdateToggle settings={autoUpdate} />}
 
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div className="text-sm font-medium text-foreground">{t("plugins:installedPlugins")}</div>
-        <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row">
-          <Button
-            data-testid="plugins-sync-button"
-            variant="secondary"
-            disabled={actions.syncBusy}
-            onClick={actions.handleSync}
-            className={settingsActionClassName("cursor-pointer")}
-          >
-            <IconRefresh className={`h-4 w-4 ${actions.syncBusy ? "animate-spin" : ""}`} />
-            {t("plugins:sync")}
-          </Button>
-          <Button
-            data-testid="plugins-check-updates-button"
-            variant="secondary"
-            disabled={updates.checking}
-            onClick={updates.checkForUpdates}
-            className={settingsActionClassName("cursor-pointer")}
-          >
-            <IconRefresh className={`h-4 w-4 ${updates.checking ? "animate-spin" : ""}`} />
-            {t("plugins:checkForUpdates")}
-          </Button>
-          <Button
-            data-testid="install-plugin-trigger"
-            onClick={actions.openInstall}
-            className={settingsActionClassName("cursor-pointer")}
-          >
-            {t("plugins:installPlugin")}
-          </Button>
-        </div>
+        {canManage && (
+          <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row">
+            <Button
+              data-testid="plugins-sync-button"
+              variant="secondary"
+              disabled={actions.syncBusy}
+              onClick={actions.handleSync}
+              className={settingsActionClassName("cursor-pointer")}
+            >
+              <IconRefresh className={`h-4 w-4 ${actions.syncBusy ? "animate-spin" : ""}`} />
+              {t("plugins:sync")}
+            </Button>
+            <Button
+              data-testid="plugins-check-updates-button"
+              variant="secondary"
+              disabled={updates.checking}
+              onClick={updates.checkForUpdates}
+              className={settingsActionClassName("cursor-pointer")}
+            >
+              <IconRefresh className={`h-4 w-4 ${updates.checking ? "animate-spin" : ""}`} />
+              {t("plugins:checkForUpdates")}
+            </Button>
+            <Button
+              data-testid="install-plugin-trigger"
+              onClick={actions.openInstall}
+              className={settingsActionClassName("cursor-pointer")}
+            >
+              {t("plugins:installPlugin")}
+            </Button>
+          </div>
+        )}
       </div>
 
       <PluginUpdateStatus
@@ -160,7 +187,7 @@ function InstalledTab({
         error={updates.error}
       />
 
-      {actions.syncErrors.length > 0 && (
+      {canManage && actions.syncErrors.length > 0 && (
         <div
           data-testid="plugins-sync-errors"
           className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-400 space-y-1"
@@ -178,6 +205,7 @@ function InstalledTab({
         actions={actions}
         autoUpdateDefault={autoUpdate.autoUpdateDefault}
         updates={updates}
+        canManage={canManage}
         updateAction={updateAction}
         isFinePointer={isFinePointer}
       />
@@ -223,6 +251,7 @@ type PluginListProps = {
   list: ReturnType<typeof usePlugins>;
   actions: ReturnType<typeof usePluginActions>;
   autoUpdateDefault: boolean;
+  canManage: boolean;
   updates: ReturnType<typeof usePluginUpdates>;
   updateAction: ReturnType<typeof usePluginUpdateAction>;
   isFinePointer: boolean;
@@ -233,6 +262,7 @@ function PluginList({
   actions,
   autoUpdateDefault,
   updates,
+  canManage,
   updateAction,
   isFinePointer,
 }: PluginListProps) {
@@ -284,6 +314,7 @@ function PluginList({
             autoUpdateDefault={autoUpdateDefault}
             autoUpdateBusy={actions.autoUpdateBusyId === plugin.id}
             needsSetup={needsSetup.has(plugin.id)}
+            canManage={canManage}
             isFinePointer={isFinePointer}
             uninstallBusy={actions.uninstallBusy}
             onEnable={actions.handleEnable}

@@ -7,8 +7,16 @@ import type {
   TaskSessionState,
   TaskCreateLastUsedApi,
   MCPTaskAgentProfileDefault,
+  RepositoryBranchPolicy,
+  AgentProfileRecentUseApiRecord,
+  WorkflowProfileSessionStartPolicy,
+  WorkflowProfileSessionEndPolicy,
+  WorkflowSessionTarget,
+  TaskPriority,
+  SidebarTaskColorPatchApi,
 } from "../../lib/types/http";
-import type { Agent, AgentProfile } from "../../lib/types/http-agents";
+import type { Agent, AgentProfile, AvailableAgent } from "../../lib/types/http-agents";
+import type { SidebarTaskColorAutomation } from "../../lib/task-color-automation-settings";
 import { normalizeAgentProfile } from "../../lib/api/domains/agent-profile-normalize";
 import type {
   PRCommitDetail,
@@ -39,8 +47,19 @@ import type {
   SSHTestRequest,
   SSHTestResult,
 } from "../../lib/types/http-ssh";
+import type {
+  KubernetesSession,
+  KubernetesTestRequest,
+  KubernetesTestResult,
+} from "../../lib/types/http-kubernetes";
 import { loadInterimSettingsInterlockToken } from "./interim-settings-interlock";
 import { dwell } from "./causal-waits";
+
+export type QueueSessionIdentityInput = {
+  taskId: string;
+  sessionId: string;
+  sessionIncarnationId: string;
+};
 
 // --- GitHub Mock Types ---
 
@@ -146,6 +165,15 @@ export type MockGitHubPersonalConnection = {
   access_expires_at?: string;
 };
 
+export type E2ERemoteContributionBinding = {
+  source_repository: {
+    remote_url: string;
+  };
+  base_branch: string;
+  head_branch: string;
+  head_sha: string;
+};
+
 export type MockGitHubCLIAccount = {
   host: string;
   login: string;
@@ -175,11 +203,86 @@ function setIf(body: Record<string, unknown>, key: string, value: unknown) {
   if (value !== undefined && value !== null) body[key] = value;
 }
 
+type WorkflowStepCreateOpts = {
+  is_start_step?: boolean;
+  agent_profile_id?: string;
+  session_target?: WorkflowSessionTarget | null;
+  profile_session_start_policy?: WorkflowProfileSessionStartPolicy;
+  profile_session_end_policy?: WorkflowProfileSessionEndPolicy;
+  auto_advance_requires_signal?: boolean;
+  complete_task_on_enter?: boolean;
+  events?: {
+    on_enter?: Array<{ type: string; config?: Record<string, unknown> }>;
+    on_turn_start?: Array<{ type: string; config?: Record<string, unknown> }>;
+    on_turn_complete?: Array<{ type: string; config?: Record<string, unknown> }>;
+  };
+};
+
+function buildWorkflowStepCreateBody(
+  workflowId: string,
+  name: string,
+  position: number,
+  opts?: WorkflowStepCreateOpts,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { workflow_id: workflowId, name, position };
+  if (opts?.is_start_step !== undefined) body.is_start_step = opts.is_start_step;
+  setIf(body, "agent_profile_id", opts?.agent_profile_id);
+  if (opts?.session_target !== undefined) body.session_target = opts.session_target;
+  if (opts?.profile_session_start_policy) {
+    body.profile_session_start_policy = opts.profile_session_start_policy;
+  }
+  if (opts?.profile_session_end_policy) {
+    body.profile_session_end_policy = opts.profile_session_end_policy;
+  }
+  if (opts?.auto_advance_requires_signal !== undefined) {
+    body.auto_advance_requires_signal = opts.auto_advance_requires_signal;
+  }
+  if (opts?.complete_task_on_enter !== undefined) {
+    body.complete_task_on_enter = opts.complete_task_on_enter;
+  }
+  setIf(body, "events", opts?.events);
+  return body;
+}
+
+type CreateRepositoryOpts = {
+  name?: string;
+  provider?: string;
+  provider_host?: string;
+  provider_owner?: string;
+  provider_name?: string;
+  remote_url?: string;
+  pull_before_worktree?: boolean;
+};
+
+function buildRepositoryCreateBody(
+  localPath: string,
+  defaultBranch: string,
+  opts?: CreateRepositoryOpts,
+): Record<string, unknown> {
+  return {
+    name: opts?.name ?? "E2E Repo",
+    source_type: "local",
+    local_path: localPath,
+    default_branch: defaultBranch,
+    ...(opts?.provider ? { provider: opts.provider } : {}),
+    ...(opts?.provider_host ? { provider_host: opts.provider_host } : {}),
+    ...(opts?.provider_owner ? { provider_owner: opts.provider_owner } : {}),
+    ...(opts?.provider_name ? { provider_name: opts.provider_name } : {}),
+    ...(opts?.remote_url ? { remote_url: opts.remote_url } : {}),
+    ...(opts?.pull_before_worktree !== undefined
+      ? { pull_before_worktree: opts.pull_before_worktree }
+      : {}),
+  };
+}
+
 type CreateTaskOpts = {
   description?: string;
   workflow_id?: string;
   workflow_step_id?: string;
   agent_profile_id?: string;
+  /** Prepare a CREATED session without launching the agent. */
+  prepare_session?: boolean;
+  session_target?: WorkflowSessionTarget | null;
   executor_profile_id?: string;
   repository_ids?: string[];
   repositories?: TaskRepositoryInput[];
@@ -194,6 +297,8 @@ type CreateTaskOpts = {
   blocked_by?: string[];
   /** Force the start-when-unblocked intent on or off; defaults from start_agent. */
   start_when_unblocked?: boolean;
+  /** One of "critical" | "high" | "medium" | "low". Server defaults to "medium" when omitted. */
+  priority?: TaskPriority;
 };
 
 export type TaskDependencyRef = {
@@ -215,6 +320,7 @@ type TaskRepositoryInput = {
   repository_id?: string;
   base_branch?: string;
   checkout_branch?: string;
+  branch_policy_id?: string;
   pr_number?: number;
   remote_url?: string;
   provider?: string;
@@ -244,7 +350,10 @@ function buildCreateTaskBody(
   };
   setIf(body, "workflow_id", options.workflow_id);
   setIf(body, "workflow_step_id", options.workflow_step_id);
+  setIf(body, "priority", options.priority);
   setIf(body, "agent_profile_id", options.agent_profile_id);
+  if (options.prepare_session) body.prepare_session = true;
+  if (options.session_target !== undefined) body.session_target = options.session_target;
   setIf(body, "executor_profile_id", options.executor_profile_id);
   setIf(body, "metadata", buildTaskMetadata(options));
   setIf(
@@ -262,6 +371,7 @@ function buildCreateTaskBody(
   if (options.start_when_unblocked !== undefined) {
     body.start_when_unblocked = options.start_when_unblocked;
   }
+  setIf(body, "priority", options.priority);
   return body;
 }
 
@@ -289,6 +399,8 @@ type OptionalAgentTaskOpts = {
   blocked_by?: string[];
   /** Force the start-when-unblocked intent on or off; defaults from start_agent. */
   start_when_unblocked?: boolean;
+  /** Prepare the task without launching its session so E2E fixtures can bind it first. */
+  start_agent?: boolean;
 };
 
 /** `repositories` (with per-entry branches) takes precedence over the shorthand
@@ -317,6 +429,7 @@ function buildOptionalAgentTaskFields(opts?: OptionalAgentTaskOpts): Record<stri
   if (opts.start_when_unblocked !== undefined) {
     fields.start_when_unblocked = opts.start_when_unblocked;
   }
+  if (opts.start_agent !== undefined) fields.start_agent = opts.start_agent;
   return fields;
 }
 
@@ -464,36 +577,7 @@ export class ApiClient {
   async createTask(
     workspaceId: string,
     title: string,
-    opts?: {
-      description?: string;
-      workflow_id?: string;
-      workflow_step_id?: string;
-      /** Stored in task.Metadata so auto_start_agent can pick it up on on_enter. */
-      agent_profile_id?: string;
-      /** Executor profile used when the task session is prepared. */
-      executor_profile_id?: string;
-      /** Repository IDs to associate with the task (required for agent execution). */
-      repository_ids?: string[];
-      /** Full repository entries with optional checkout_branch / base_branch / pr_number. */
-      repositories?: TaskRepositoryInput[];
-      /** When true, task is placed at position 0 regardless of is_start_step. */
-      plan_mode?: boolean;
-      /** Start the task with the immutable autopilot MCP/prompt contract. */
-      autopilot?: boolean;
-      /** Extra metadata to store on the task. */
-      metadata?: Record<string, unknown>;
-      /** Parent task ID for subtasks. */
-      parent_id?: string;
-      /** Workspace sharing policy used by parent/child task trees. */
-      workspace_mode?: "inherit_parent" | "new_workspace" | "shared_group";
-      /** Existing group required when workspace_mode is shared_group. */
-      workspace_group_id?: string;
-      attachments?: MessageAttachmentInput[];
-      /** Task IDs this task must wait on. Suppresses the immediate agent launch. */
-      blocked_by?: string[];
-      /** Force the start-when-unblocked intent on or off; defaults from start_agent. */
-      start_when_unblocked?: boolean;
-    },
+    opts?: CreateTaskOpts,
   ): Promise<CreateTaskResponse> {
     return this.request("POST", "/api/v1/tasks", buildCreateTaskBody(workspaceId, title, opts));
   }
@@ -509,6 +593,12 @@ export class ApiClient {
    *  cross-task message badge. */
   async updateTaskTitle(taskId: string, title: string): Promise<void> {
     await this.request("PATCH", `/api/v1/tasks/${taskId}`, { title });
+  }
+
+  /** Change a task's priority via the same PATCH path the priority-picker
+   *  uses, so the update travels over `task.updated` WS to an open board. */
+  async updateTaskPriority(taskId: string, priority: TaskPriority): Promise<void> {
+    await this.request("PATCH", `/api/v1/tasks/${taskId}`, { priority });
   }
 
   /** Replace a task's metadata via the same PATCH path a real orchestrator
@@ -541,9 +631,17 @@ export class ApiClient {
     };
   }
 
+  async listAvailableAgents(): Promise<{ agents: AvailableAgent[]; total: number }> {
+    return this.request("GET", "/api/v1/agents/available");
+  }
+
   async deleteAgentProfile(profileId: string, force?: boolean): Promise<void> {
     const qs = force ? "?force=true" : "";
     await this.request("DELETE", `/api/v1/agent-profiles/${profileId}${qs}`);
+  }
+
+  async listAgentProfileRecentUse(): Promise<AgentProfileRecentUseApiRecord[]> {
+    return this.request("GET", "/api/v1/user/agent-profile-recent-use");
   }
 
   /**
@@ -620,6 +718,7 @@ export class ApiClient {
       model: string;
       fallback_model?: string;
       auto_fallback?: boolean;
+      auto_approve?: boolean;
       mode?: string;
       config_options?: Record<string, string>;
       cli_passthrough?: boolean;
@@ -633,6 +732,7 @@ export class ApiClient {
       model: opts.model,
       fallback_model: opts.fallback_model,
       auto_fallback: opts.auto_fallback,
+      auto_approve: opts.auto_approve,
       mode: opts.mode,
       config_options: opts.config_options,
       cli_passthrough: opts.cli_passthrough ?? false,
@@ -730,13 +830,15 @@ export class ApiClient {
       blocked_by?: string[];
       /** Force the start-when-unblocked intent on or off; defaults from start_agent. */
       start_when_unblocked?: boolean;
+      /** Prepare the task without launching its session so E2E fixtures can bind it first. */
+      start_agent?: boolean;
     },
   ): Promise<CreateTaskResponse> {
     return this.request("POST", "/api/v1/tasks", {
       workspace_id: workspaceId,
       title,
       description: opts?.description ?? "",
-      start_agent: true,
+      start_agent: opts?.start_agent ?? true,
       agent_profile_id: agentProfileId,
       ...buildOptionalAgentTaskFields(opts),
     });
@@ -777,61 +879,53 @@ export class ApiClient {
     workflowId: string,
     name: string,
     position: number,
-    opts?: {
-      is_start_step?: boolean;
-      events?: {
-        on_enter?: Array<{ type: string; config?: Record<string, unknown> }>;
-        on_turn_complete?: Array<{ type: string; config?: Record<string, unknown> }>;
-      };
-    },
+    opts?: WorkflowStepCreateOpts,
   ): Promise<{ id: string }> {
-    return this.request("POST", `/api/v1/workflow/steps`, {
-      workflow_id: workflowId,
-      name,
-      position,
-      ...(opts?.is_start_step != null ? { is_start_step: opts.is_start_step } : {}),
-      ...(opts?.events != null ? { events: opts.events } : {}),
-    });
+    return this.request(
+      "POST",
+      `/api/v1/workflow/steps`,
+      buildWorkflowStepCreateBody(workflowId, name, position, opts),
+    );
   }
 
   async createRepository(
     workspaceId: string,
     localPath: string,
     defaultBranch = "main",
-    opts?: {
-      name?: string;
-      provider?: string;
-      provider_host?: string;
-      provider_owner?: string;
-      provider_name?: string;
-    },
+    opts?: CreateRepositoryOpts,
   ): Promise<{ id: string }> {
-    return this.request("POST", `/api/v1/workspaces/${workspaceId}/repositories`, {
-      name: opts?.name ?? "E2E Repo",
-      source_type: "local",
-      local_path: localPath,
-      default_branch: defaultBranch,
-      ...(opts?.provider ? { provider: opts.provider } : {}),
-      ...(opts?.provider_host ? { provider_host: opts.provider_host } : {}),
-      ...(opts?.provider_owner ? { provider_owner: opts.provider_owner } : {}),
-      ...(opts?.provider_name ? { provider_name: opts.provider_name } : {}),
-    });
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${workspaceId}/repositories`,
+      buildRepositoryCreateBody(localPath, defaultBranch, opts),
+    );
   }
 
   /**
-   * Creates a repository set. `repositoryIds` is ordered and is the order the set
-   * fills the task-creation picker.
+   * Creates a repository set. The member list is ordered and is the order the
+   * set fills the task-creation picker. String ids keep the compatibility
+   * payload available for older scenarios; member objects exercise saved bases.
    */
   async createRepositorySet(
     workspaceId: string,
     name: string,
-    repositoryIds: string[],
+    repositoryIds: string[] | Array<{ repositoryId: string; baseBranch?: string }>,
     description = "",
   ): Promise<{ id: string; name: string }> {
+    const members = repositoryIds.filter(
+      (entry): entry is { repositoryId: string; baseBranch?: string } => typeof entry !== "string",
+    );
     return this.request("POST", `/api/v1/workspaces/${workspaceId}/repository-sets`, {
       name,
       description,
-      repository_ids: repositoryIds,
+      ...(members.length === repositoryIds.length
+        ? {
+            repositories: members.map((member) => ({
+              repository_id: member.repositoryId,
+              base_branch: member.baseBranch ?? "",
+            })),
+          }
+        : { repository_ids: repositoryIds }),
     });
   }
 
@@ -842,12 +936,55 @@ export class ApiClient {
     return this.request("GET", `/api/v1/workspaces/${workspaceId}/repositories`);
   }
 
+  async listRepositoryBranchPolicies(repositoryId: string): Promise<{
+    repository_branch_policies: RepositoryBranchPolicy[];
+    total: number;
+  }> {
+    return this.request("GET", `/api/v1/repositories/${repositoryId}/branch-policies`);
+  }
+
+  async createRepositoryBranchPolicy(
+    repositoryId: string,
+    policy: {
+      name: string;
+      description?: string;
+      base_branch: string;
+      branch_template: string;
+      pull_request_target: string;
+    },
+  ): Promise<RepositoryBranchPolicy> {
+    return this.request("POST", `/api/v1/repositories/${repositoryId}/branch-policies`, policy);
+  }
+
+  async updateRepositoryBranchPolicy(
+    policyId: string,
+    patch: Partial<{
+      name: string;
+      description: string;
+      base_branch: string;
+      branch_template: string;
+      pull_request_target: string;
+    }>,
+  ): Promise<RepositoryBranchPolicy> {
+    return this.request("PATCH", `/api/v1/repository-branch-policies/${policyId}`, patch);
+  }
+
+  async deleteRepositoryBranchPolicy(policyId: string): Promise<void> {
+    const response = await this.rawRequest(
+      "DELETE",
+      `/api/v1/repository-branch-policies/${policyId}`,
+    );
+    if (!response.ok) {
+      throw new Error(`delete branch policy failed: ${response.status} ${await response.text()}`);
+    }
+  }
+
   async listRepositorySets(workspaceId: string): Promise<{
     repository_sets: Array<{
       id: string;
       name: string;
       description: string;
-      repositories: Array<{ repository_id: string; position: number }>;
+      repositories: Array<{ repository_id: string; position: number; base_branch?: string }>;
     }>;
     total: number;
   }> {
@@ -884,8 +1021,16 @@ export class ApiClient {
     return this.request("GET", `/api/v1/secrets${suffix ? `?${suffix}` : ""}`);
   }
 
-  async deleteSecret(secretId: string, workspaceId?: string): Promise<void> {
-    const suffix = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : "";
+  async deleteSecret(
+    secretId: string,
+    workspaceId?: string,
+    options?: { force?: boolean },
+  ): Promise<void> {
+    const query = new URLSearchParams();
+    if (workspaceId) query.set("workspace_id", workspaceId);
+    if (options?.force) query.set("force", "true");
+    const encodedQuery = query.toString();
+    const suffix = encodedQuery ? `?${encodedQuery}` : "";
     const response = await this.rawRequest("DELETE", `/api/v1/secrets/${secretId}${suffix}`);
     if (!response.ok) {
       throw new Error(
@@ -909,6 +1054,7 @@ export class ApiClient {
     repositoryId: string,
     updates: {
       default_branch?: string;
+      pull_before_worktree?: boolean;
       provider?: string;
       provider_repo_id?: string;
       provider_host?: string;
@@ -946,8 +1092,17 @@ export class ApiClient {
   async createExecutor(
     name: string,
     type: string,
+    config?: Record<string, string>,
   ): Promise<{ id: string; name: string; type: string }> {
-    return this.request("POST", "/api/v1/executors", { name, type });
+    return this.request("POST", "/api/v1/executors", { name, type, config });
+  }
+
+  async testKubernetesConnection(request: KubernetesTestRequest): Promise<KubernetesTestResult> {
+    return this.request("POST", "/api/v1/kubernetes/test", request);
+  }
+
+  async listKubernetesSessions(executorId: string): Promise<KubernetesSession[]> {
+    return this.request("GET", `/api/v1/kubernetes/executors/${executorId}/sessions`);
   }
 
   async updateWorkspace(
@@ -989,6 +1144,14 @@ export class ApiClient {
       ...(opts?.prepare_script ? { prepare_script: opts.prepare_script } : {}),
       ...(opts?.cleanup_script ? { cleanup_script: opts.cleanup_script } : {}),
     });
+  }
+
+  async updateExecutorProfile(
+    executorId: string,
+    profileId: string,
+    updates: { config: Record<string, string> },
+  ): Promise<void> {
+    await this.request("PATCH", `/api/v1/executors/${executorId}/profiles/${profileId}`, updates);
   }
 
   async deleteExecutorProfile(profileId: string): Promise<void> {
@@ -1049,10 +1212,12 @@ export class ApiClient {
 
   async getUserSettings(): Promise<{
     settings: {
+      workspace_id?: string;
+      workflow_filter_id?: string;
       terminal_link_behavior?: string;
       terminal_font_family?: string;
       terminal_font_size?: number;
-      startup_page?: "task_overview" | "last_task";
+      startup_page?: "task_overview" | "last_task" | "threads";
       mcp_task_agent_profile_default?: MCPTaskAgentProfileDefault;
       tasks_list_show_details?: boolean;
       show_transcript_auto_scroll_control?: boolean;
@@ -1069,6 +1234,7 @@ export class ApiClient {
     enable_preview_on_click?: boolean;
     confirm_task_archive?: boolean;
     prevent_auto_start_agent_on_open?: boolean;
+    auto_focus_new_tasks?: boolean;
     unread_divider?: boolean;
     agent_generated_task_titles?: boolean;
     mcp_task_agent_profile_default?: MCPTaskAgentProfileDefault;
@@ -1083,7 +1249,7 @@ export class ApiClient {
     terminal_link_behavior?: "new_tab" | "browser_panel";
     terminal_font_family?: string;
     terminal_font_size?: number;
-    startup_page?: "task_overview" | "last_task";
+    startup_page?: "task_overview" | "last_task" | "threads";
     keyboard_shortcuts?: Record<string, unknown>;
     default_utility_agent_id?: string;
     default_utility_model?: string;
@@ -1091,6 +1257,9 @@ export class ApiClient {
     sidebar_views?: unknown[];
     sidebar_active_view_id?: string;
     sidebar_draft?: unknown;
+    thread_views?: unknown[];
+    thread_active_view_id?: string;
+    thread_view_draft?: unknown;
     saved_layouts?: unknown[];
     app_status_bar_enabled?: boolean;
     lsp_auto_start_languages?: string[];
@@ -1104,20 +1273,39 @@ export class ApiClient {
     task_create_last_used?: TaskCreateLastUsedApi;
     kanban_hidden_step_ids?: Record<string, string[]>;
     workflow_ids_with_auto_hide_empty_steps?: string[];
+    sidebar_task_color_automation?: SidebarTaskColorAutomation;
+    sidebar_task_color_patch?: SidebarTaskColorPatchApi;
+    kanban_sort?: string;
+    kanban_priority_filter_tokens?: string[];
   }): Promise<void> {
     await this.request("PATCH", "/api/v1/user/settings", settings);
   }
 
-  async moveTask(taskId: string, workflowId: string, workflowStepId: string): Promise<void> {
+  async moveTask(
+    taskId: string,
+    workflowId: string,
+    workflowStepId: string,
+    entryOptions?: {
+      reset_context?: boolean;
+      instructions?: string;
+      skip_step_prompt?: boolean;
+    },
+  ): Promise<void> {
     await this.request("POST", `/api/v1/tasks/${taskId}/move`, {
       workflow_id: workflowId,
       workflow_step_id: workflowStepId,
+      ...(entryOptions ? { entry_options: entryOptions } : {}),
     });
   }
 
   async updateWorkflow(
     workflowId: string,
-    updates: { name?: string; description?: string; prompt?: string; agent_profile_id?: string },
+    updates: {
+      name?: string;
+      description?: string;
+      prompt?: string;
+      agent_profile_id?: string;
+    },
   ): Promise<Workflow> {
     return this.request("PATCH", `/api/v1/workflows/${workflowId}`, updates);
   }
@@ -1127,6 +1315,8 @@ export class ApiClient {
     updates: {
       prompt?: string;
       agent_profile_id?: string;
+      /** Promotes this step to the workflow's start step, demoting the previous one. */
+      is_start_step?: boolean;
       events?: {
         on_enter?: Array<{ type: string; config?: Record<string, unknown> }>;
         on_turn_start?: Array<{ type: string; config?: Record<string, unknown> }>;
@@ -1140,10 +1330,15 @@ export class ApiClient {
         on_budget_alert?: Array<{ type: string; config?: Record<string, unknown> }>;
         on_agent_error?: Array<{ type: string; config?: Record<string, unknown> }>;
       };
+      auto_advance_requires_signal?: boolean;
       wip_limit?: number;
       pull_from_step_id?: string | null;
       cancel_triggers_turn_complete?: boolean;
+      complete_task_on_enter?: boolean;
       stage_type?: "work" | "review" | "approval" | "custom";
+      profile_session_start_policy?: WorkflowProfileSessionStartPolicy;
+      profile_session_end_policy?: WorkflowProfileSessionEndPolicy;
+      session_target?: WorkflowSessionTarget | null;
     },
   ): Promise<void> {
     await this.request("PUT", `/api/v1/workflow/steps/${stepId}`, { id: stepId, ...updates });
@@ -1266,11 +1461,50 @@ export class ApiClient {
   }
 
   /**
+   * Scripts a session's BackgroundProbe answer sequence (spec
+   * docs/specs/disambiguate-waiting/spec.md, "Probe port (backend)"). Each
+   * probe call for the session consumes the next entry in order and holds at
+   * the last one once exhausted — mirrors the backend's own
+   * ScriptedBackgroundProbe test double. Only mounted when the backend was
+   * started with KANDEV_E2E_MOCK=true.
+   */
+  async scriptBackgroundProbe(
+    sessionId: string,
+    results: Array<"live" | "settled" | "unknown">,
+  ): Promise<void> {
+    await this.request("POST", "/api/v1/_test/background-probe", {
+      session_id: sessionId,
+      results,
+    });
+  }
+
+  /**
+   * Reads back how many times the scripted BackgroundProbe has been called
+   * for a session since its last scriptBackgroundProbe call (AC-73) — lets a
+   * test assert a minimum sample count was actually reached instead of only
+   * checking the affordance's current visibility.
+   */
+  async backgroundProbeCallCount(sessionId: string): Promise<number> {
+    const { calls } = await this.request<{ calls: number }>(
+      "GET",
+      `/api/v1/_test/background-probe/${sessionId}/calls`,
+    );
+    return calls;
+  }
+
+  /**
    * Seeds a message via the e2e harness. `metadata` lands on the message row;
    * `turnMetadata` is persisted on the ensured turn so specs can exercise the
    * metadata dialog's `turn_metadata` field. `authorType` defaults to agent;
    * "user" seeds a prompt row whose prompt_index is computed server-side.
    * `createdAt` (RFC3339) pins the row's timestamp for deterministic ordering.
+   *
+   * `newTurn` creates a brand-new turn for this message instead of reusing
+   * the session's active turn, so a spec can hold a real open turn on the
+   * session while seeding a second, independently-timed turn alongside it
+   * (e.g. a lifecycle-shaped turn that must not shadow the open one).
+   * `turnStartedAt`/`turnCompletedAt` (RFC3339) set that new turn's
+   * timestamps; both are ignored unless `newTurn` is true.
    */
   async seedSessionMessage(
     sessionId: string,
@@ -1281,22 +1515,50 @@ export class ApiClient {
       turnMetadata?: Record<string, unknown>;
       authorType?: "user" | "agent";
       createdAt?: string;
+      newTurn?: boolean;
+      turnStartedAt?: string;
+      turnCompletedAt?: string;
     },
-  ): Promise<void> {
+  ): Promise<{ messageId: string; turnId: string | null }> {
     const body: Record<string, unknown> = { session_id: sessionId, type: opts.type };
     if (opts.content !== undefined) body.content = opts.content;
     if (opts.metadata !== undefined) body.metadata = opts.metadata;
     if (opts.turnMetadata !== undefined) body.turn_metadata = opts.turnMetadata;
     if (opts.authorType !== undefined) body.author_type = opts.authorType;
     if (opts.createdAt !== undefined) body.created_at = opts.createdAt;
-    await this.request("POST", "/api/v1/_test/messages", body);
+    if (opts.newTurn !== undefined) body.new_turn = opts.newTurn;
+    if (opts.turnStartedAt !== undefined) body.turn_started_at = opts.turnStartedAt;
+    if (opts.turnCompletedAt !== undefined) body.turn_completed_at = opts.turnCompletedAt;
+    const result = await this.request<{ message_id: string; turn_id?: string | null }>(
+      "POST",
+      "/api/v1/_test/messages",
+      body,
+    );
+    return { messageId: result.message_id, turnId: result.turn_id ?? null };
   }
 
-  async seedToolCallMessages(sessionId: string, count: number): Promise<void> {
+  async updateSessionMessage(messageId: string, content: string): Promise<void> {
+    await this.request("PATCH", `/api/v1/_test/messages/${messageId}`, { content });
+  }
+
+  async deleteSessionMessage(messageId: string): Promise<void> {
+    await this.request("DELETE", `/api/v1/_test/messages/${messageId}`);
+  }
+
+  async completeSessionTurn(turnId: string): Promise<void> {
+    await this.request("POST", `/api/v1/_test/turns/${turnId}/complete`);
+  }
+
+  async seedToolCallMessages(
+    sessionId: string,
+    count: number,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
     for (let i = 0; i < count; i++) {
       await this.seedSessionMessage(sessionId, {
         type: "tool_call",
         content: `synthetic tool call ${i + 1}`,
+        metadata,
       });
     }
   }
@@ -1477,11 +1739,20 @@ export class ApiClient {
     await this.seedMockGitHubRepositoryAccess(prs);
   }
 
+  async attachE2EGitHubContribution(
+    taskId: string,
+    prUrl: string,
+  ): Promise<{ binding: E2ERemoteContributionBinding; remote_name: string }> {
+    return this.request("POST", `/api/v1/e2e/tasks/${taskId}/remote-contribution`, {
+      pr_url: prUrl,
+    });
+  }
+
   async mockGitHubSetMergeOutcome(
     owner: string,
     repo: string,
     number: number,
-    outcome: "merged" | "queued",
+    outcome: "merged" | "queued" | "failed" | "pending" | "head_mismatch",
   ): Promise<void> {
     await this.request("PUT", "/api/v1/github/mock/merge-outcomes", {
       owner,
@@ -1489,6 +1760,54 @@ export class ApiClient {
       number,
       outcome,
     });
+  }
+
+  async mockGitHubTransitionMergeQueue(data: {
+    task_id: string;
+    owner: string;
+    repo: string;
+    pr_number: number;
+    head_sha?: string;
+    merge_queue_state?: string;
+    merge_queue_position?: number | null;
+    merge_queue_entry_id?: string;
+    merge_queue_entry_head_sha?: string;
+    merge_queue_estimated_time_to_merge_seconds?: number | null;
+    merge_queue_last_removal_id?: string;
+    merge_queue_last_removed_at?: string;
+    merge_queue_last_removal_reason?: string;
+    merge_queue_last_removal_before_sha?: string;
+    checks?: Array<{
+      name: string;
+      source?: string;
+      status?: string;
+      conclusion?: string;
+      html_url?: string;
+      output?: string;
+    }>;
+  }): Promise<void> {
+    await this.request("PUT", "/api/v1/github/mock/merge-queue", data);
+  }
+
+  async mockGitHubGetMergeAttempts(): Promise<
+    Array<{
+      owner: string;
+      repo: string;
+      number: number;
+      merge_method: string;
+      expected_head_sha: string;
+    }>
+  > {
+    const response = await this.request<{
+      attempts?: Array<{
+        owner: string;
+        repo: string;
+        number: number;
+        merge_method: string;
+        expected_head_sha: string;
+      }>;
+    }>("GET", "/api/v1/github/mock/merge-attempts");
+    return response.attempts ?? [];
   }
 
   async mockGitHubAddIssues(issues: MockIssue[]): Promise<void> {
@@ -1672,12 +1991,21 @@ export class ApiClient {
     base_branch: string;
     author_login: string;
     state?: string;
+    head_sha?: string;
+    head_repo_owner?: string;
+    head_repo_name?: string;
     review_state?: string;
     checks_state?: string;
     mergeable_state?: string;
     merge_queue_state?: string;
     merge_queue_position?: number | null;
+    merge_queue_entry_id?: string;
+    merge_queue_entry_head_sha?: string;
     merge_queue_estimated_time_to_merge_seconds?: number | null;
+    merge_queue_last_removal_id?: string;
+    merge_queue_last_removed_at?: string;
+    merge_queue_last_removal_reason?: string;
+    merge_queue_last_removal_before_sha?: string;
     additions?: number;
     deletions?: number;
     review_count?: number;
@@ -1687,7 +2015,12 @@ export class ApiClient {
     checks_passing?: number;
     unresolved_review_threads?: number;
   }): Promise<void> {
-    await this.request("POST", "/api/v1/github/mock/task-prs", data);
+    const workspaceId = data.workspace_id?.trim() || (await this.activeWorkspaceId());
+    await this.request(
+      "POST",
+      "/api/v1/github/mock/task-prs",
+      workspaceId ? { ...data, workspace_id: workspaceId } : data,
+    );
   }
 
   async associateGitHubTaskPR(data: {
@@ -1776,8 +2109,43 @@ export class ApiClient {
       line?: number;
       side?: string;
       comment_type?: string;
+      html_url?: string;
+      in_reply_to?: number | null;
       created_at?: string;
       updated_at?: string;
+    }>;
+    workflow_runs?: Array<{
+      id: number;
+      run_attempt?: number;
+      workflow_id?: number;
+      name: string;
+      event: string;
+      status: string;
+      conclusion?: string | null;
+      head_sha?: string;
+      head_branch?: string;
+      head_repo_owner?: string;
+      head_repo_name?: string;
+      html_url?: string;
+      created_at?: string;
+      updated_at?: string;
+      pull_requests?: Array<{
+        number: number;
+        head_sha?: string;
+        head_branch?: string;
+        head_repo_owner?: string;
+        head_repo_name?: string;
+      }>;
+    }>;
+    workflow_jobs?: Array<{
+      run_id: number;
+      run_attempt?: number;
+      jobs: Array<{
+        id: number;
+        name: string;
+        status: string;
+        conclusion?: string | null;
+      }>;
     }>;
   }): Promise<void> {
     await this.request("POST", "/api/v1/github/mock/pr-feedback", data);
@@ -2078,6 +2446,7 @@ export class ApiClient {
       content: string;
       author_type: string;
       type?: string;
+      turn_id?: string;
       raw_content?: string;
       metadata?: Record<string, unknown>;
     }>;
@@ -2089,6 +2458,16 @@ export class ApiClient {
     turns: Array<{ id: string; completed_at?: string | null }>;
   }> {
     return this.request("GET", `/api/v1/task-sessions/${sessionId}/turns`);
+  }
+
+  async listWorkflowHistory(sessionId: string): Promise<{
+    history: Array<{
+      from_step_id?: string | null;
+      to_step_id: string;
+      trigger: string;
+    }>;
+  }> {
+    return this.request("GET", `/api/v1/sessions/${sessionId}/workflow/history`);
   }
 
   async getTaskSession(sessionId: string): Promise<{
@@ -2129,11 +2508,15 @@ export class ApiClient {
     sessions: Array<{
       id: string;
       task_id: string;
+      queue_incarnation_id: string;
       agent_profile_id?: string;
       executor_id?: string;
       executor_profile_id?: string;
       state: string;
+      is_primary: boolean;
       started_at: string;
+      updated_at: string;
+      completed_at?: string | null;
       task_environment_id?: string;
       workspace_path?: string;
       worktree_path?: string;
@@ -2145,6 +2528,22 @@ export class ApiClient {
     total: number;
   }> {
     return this.request("GET", `/api/v1/tasks/${taskId}/sessions`);
+  }
+
+  async getQueueSessionIdentity(
+    taskId: string,
+    sessionId: string,
+  ): Promise<QueueSessionIdentityInput> {
+    const { sessions } = await this.listTaskSessions(taskId);
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session?.queue_incarnation_id) {
+      throw new Error(`Queue identity is unavailable for session ${sessionId}`);
+    }
+    return {
+      taskId,
+      sessionId,
+      sessionIncarnationId: session.queue_incarnation_id,
+    };
   }
 
   /**
@@ -2163,6 +2562,23 @@ export class ApiClient {
   ): Promise<TaskDependencyProjection> {
     return this.request("POST", `/api/v1/tasks/${taskId}/dependencies`, {
       depends_on_task_id: dependsOnTaskId,
+    });
+  }
+
+  /** Replace the complete predecessor set, including an empty set. */
+  async replaceTaskDependencies(
+    taskId: string,
+    dependsOnTaskIds: string[],
+  ): Promise<TaskDependencyProjection> {
+    return this.request("PUT", `/api/v1/tasks/${taskId}/dependencies`, {
+      depends_on_task_ids: dependsOnTaskIds,
+    });
+  }
+
+  /** Raw replacement helper for asserting structured validation failures. */
+  async rawReplaceTaskDependencies(taskId: string, dependsOnTaskIds: string[]): Promise<Response> {
+    return this.rawRequest("PUT", `/api/v1/tasks/${taskId}/dependencies`, {
+      depends_on_task_ids: dependsOnTaskIds,
     });
   }
 
@@ -2200,18 +2616,23 @@ export class ApiClient {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    await this.request("DELETE", `/api/v1/task-sessions/${sessionId}`);
+    await this.request("DELETE", `/api/v1/_test/task-sessions/${sessionId}`);
   }
 
   async getTask(taskId: string): Promise<{
     id: string;
     title: string;
+    description?: string;
     autopilot?: boolean;
     primary_session_id?: string | null;
     primary_executor_type?: string | null;
     state?: string;
     workflow_step_id?: string;
+    wip_admitted?: boolean;
+    queued_for_step_id?: string;
+    priority?: TaskPriority;
     parent_id?: string;
+    position?: number;
     metadata?: Record<string, unknown> | null;
     repositories?: Array<{
       id: string;
@@ -2303,10 +2724,10 @@ export class ApiClient {
   async launchSession(
     payload: {
       task_id: string;
-      agent_profile_id: string;
+      agent_profile_id?: string;
       executor_id?: string;
       executor_profile_id?: string;
-      prompt: string;
+      prompt?: string;
       intent?: string;
       session_id?: string;
       workflow_step_id?: string;
@@ -2471,26 +2892,48 @@ export class ApiClient {
   }
 
   async queueMessage(
-    taskId: string,
-    sessionId: string,
+    identity: QueueSessionIdentityInput,
     content: string,
     attachments?: MessageAttachmentInput[],
   ): Promise<void> {
     await this.wsRequest("message.queue.add", {
-      task_id: taskId,
-      session_id: sessionId,
+      task_id: identity.taskId,
+      session_id: identity.sessionId,
+      session_incarnation_id: identity.sessionIncarnationId,
       content,
       attachments,
     });
   }
 
-  /** Removes every pending queued message for a session (message.queue.cancel). */
-  async clearQueue(sessionId: string): Promise<void> {
-    await this.wsRequest("message.queue.cancel", { session_id: sessionId });
+  /** Removes every pending queued message for an immutable session identity. */
+  async clearQueue(identity: QueueSessionIdentityInput): Promise<void> {
+    await this.wsRequest("message.queue.cancel", {
+      task_id: identity.taskId,
+      session_id: identity.sessionId,
+      session_incarnation_id: identity.sessionIncarnationId,
+    });
   }
 
-  async getQueueStatus(sessionId: string): Promise<{ count: number; auto_run: boolean }> {
-    return this.wsRequest("message.queue.get", { session_id: sessionId });
+  async getQueueStatus(
+    identity: QueueSessionIdentityInput,
+  ): Promise<{ count: number; auto_run: boolean; auto_merge_enabled: boolean }> {
+    return this.wsRequest("message.queue.get", {
+      task_id: identity.taskId,
+      session_id: identity.sessionId,
+      session_incarnation_id: identity.sessionIncarnationId,
+    });
+  }
+
+  async setQueueAutoRun(
+    identity: QueueSessionIdentityInput,
+    enabled: boolean,
+  ): Promise<{ session_id: string; auto_run: boolean; dispatched: boolean }> {
+    return this.wsRequest("message.queue.auto_run.set", {
+      task_id: identity.taskId,
+      session_id: identity.sessionId,
+      session_incarnation_id: identity.sessionIncarnationId,
+      enabled,
+    });
   }
 
   // --- Integration config seeding (real API, not mock) ---
@@ -3195,6 +3638,10 @@ export class ApiClient {
     name: string;
     workflowId?: string;
     workflowStepId?: string;
+    taskMode?: "automation_run" | "normal_task";
+    repositoryMode?: "workspace_default" | "selected" | "none";
+    repositoryIds?: string[];
+    repositories?: Array<{ repository_id: string; base_branch: string }>;
     /**
      * The automation's standing instruction. The run view only renders the
      * instruction card when there is one, so specs asserting on where that
@@ -3230,6 +3677,10 @@ export class ApiClient {
       name: opts.name,
       workflow_id: opts.workflowId ?? "",
       workflow_step_id: opts.workflowStepId ?? "",
+      task_mode: opts.taskMode,
+      repository_mode: opts.repositoryMode,
+      repository_ids: opts.repositoryIds,
+      repositories: opts.repositories,
       prompt: opts.prompt ?? "",
       agent_profile_id: opts.agentProfileId ?? "",
       executor_profile_id: opts.executorProfileId ?? "",
@@ -3269,11 +3720,21 @@ export class ApiClient {
     automationId: string,
     status = "skipped",
     taskId?: string,
-  ): Promise<{ id: string; automation_id: string; status: string; task_id: string }> {
+    opts?: { sessionId?: string; turnId?: string },
+  ): Promise<{
+    id: string;
+    automation_id: string;
+    status: string;
+    task_id: string;
+    session_id: string;
+    turn_id: string;
+  }> {
     return this.request("POST", "/api/v1/e2e/automation-runs", {
       automation_id: automationId,
       status,
       task_id: taskId ?? "",
+      session_id: opts?.sessionId,
+      turn_id: opts?.turnId,
     });
   }
 

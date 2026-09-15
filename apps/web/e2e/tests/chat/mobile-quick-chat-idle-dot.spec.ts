@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test-base";
 import { watchWs } from "../../helpers/causal-waits";
+import { expectCompositorGridMotion } from "../../helpers/animation-assertions";
 import { SessionPage } from "../../pages/session-page";
 import {
   sendQuickChatMessage,
@@ -15,6 +16,7 @@ test.describe("quick chat activity indicators", () => {
   }) => {
     const ws = watchWs(testPage);
     await testPage.goto("/");
+    await testPage.getByTestId("mobile-topbar-menu").tap();
     await testPage.getByTestId("mobile-quick-chat-button").tap();
     const dialog = testPage.getByRole("dialog", { name: "Quick Chat" });
     const created = testPage.waitForResponse(
@@ -30,7 +32,7 @@ test.describe("quick chat activity indicators", () => {
       task_id: string;
     };
     const tab = dialog.getByTestId("quick-chat-tab");
-    const button = testPage.getByTestId("mobile-quick-chat-button");
+    const button = testPage.getByTestId("mobile-topbar-menu");
     const indicator = button.getByTestId("quick-chat-activity-indicator");
 
     await expect(tab).toHaveCount(1);
@@ -40,7 +42,12 @@ test.describe("quick chat activity indicators", () => {
     });
     const settled = waitForSessionSettled(ws, sessionId);
     await sendQuickChatMessage(dialog, testPage, "/slow 8s");
-    await expect(tab.getByRole("status")).toBeVisible();
+    const gridStatus = tab.getByRole("status");
+    await expect(gridStatus).toBeVisible();
+    await expectCompositorGridMotion(gridStatus);
+    expect(
+      await testPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
 
     await dialog.getByTestId("quick-chat-close").tap();
     await expect(indicator).toHaveAttribute("data-state", "running");
@@ -49,6 +56,7 @@ test.describe("quick chat activity indicators", () => {
     await expect(indicator).toHaveAttribute("data-state", "finished");
 
     await button.tap();
+    await testPage.getByTestId("mobile-quick-chat-button").tap();
     await expect(indicator).toHaveCount(0);
     await expect(dialog).toBeVisible();
   });

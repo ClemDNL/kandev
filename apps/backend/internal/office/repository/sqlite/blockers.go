@@ -39,6 +39,64 @@ func (r *Repository) DeleteTaskBlocker(ctx context.Context, taskID, blockerTaskI
 	return err
 }
 
+// ReplaceTaskBlockers atomically replaces the direct blockers for taskID.
+// Existing edges stay in place so their creation timestamps remain stable;
+// only omitted edges are deleted and new edges are inserted.
+func (r *Repository) ReplaceTaskBlockers(ctx context.Context, taskID string, blockerTaskIDs []string) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existing []string
+	if err := tx.SelectContext(ctx, &existing, tx.Rebind(
+		`SELECT blocker_task_id FROM task_blockers WHERE task_id = ?`), taskID); err != nil {
+		return err
+	}
+	existingSet := make(map[string]struct{}, len(existing))
+	for _, blockerTaskID := range existing {
+		existingSet[blockerTaskID] = struct{}{}
+	}
+	desiredSet := make(map[string]struct{}, len(blockerTaskIDs))
+	for _, blockerTaskID := range blockerTaskIDs {
+		desiredSet[blockerTaskID] = struct{}{}
+	}
+
+	for blockerTaskID := range existingSet {
+		if _, keep := desiredSet[blockerTaskID]; keep {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, tx.Rebind(
+			`DELETE FROM task_blockers WHERE task_id = ? AND blocker_task_id = ?`),
+			taskID, blockerTaskID); err != nil {
+			return err
+		}
+	}
+	for _, blockerTaskID := range blockerTaskIDs {
+		if _, alreadyExists := existingSet[blockerTaskID]; alreadyExists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, tx.Rebind(`
+			INSERT INTO task_blockers (task_id, blocker_task_id, created_at)
+			VALUES (?, ?, ?)
+		`), taskID, blockerTaskID, time.Now().UTC()); err != nil {
+			return err
+		}
+		existingSet[blockerTaskID] = struct{}{}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 // ListTasksBlockedBy returns task IDs that are blocked by the given task.
 // This is the reverse direction of ListTaskBlockers; results are ordered by
 // insertion time so callers see a stable list.
@@ -139,6 +197,15 @@ func (r *Repository) DeleteTaskBlockersForTask(ctx context.Context, taskID strin
 	return err
 }
 
+// Task lifecycle state values as stored in the shared `tasks` table,
+// shared by every office-repo reader of terminal task state
+// (IsTaskInTerminalStep, GetTaskTerminalStatus).
+const (
+	taskStateCompleted = "COMPLETED"
+	taskStateFailed    = "FAILED"
+	taskStateCancelled = "CANCELLED"
+)
+
 func (r *Repository) IsTaskInTerminalStep(ctx context.Context, taskID string) (bool, error) {
 	var state string
 	err := r.ro.QueryRowxContext(ctx, r.ro.Rebind(
@@ -146,7 +213,7 @@ func (r *Repository) IsTaskInTerminalStep(ctx context.Context, taskID string) (b
 	if err != nil {
 		return false, err
 	}
-	return state == "COMPLETED" || state == "CANCELLED", nil
+	return state == taskStateCompleted || state == taskStateFailed || state == taskStateCancelled, nil
 }
 
 // GetTaskAssignee returns the agent currently driving a task. Resolves
@@ -162,7 +229,29 @@ func (r *Repository) GetTaskAssignee(ctx context.Context, taskID string) (string
 	return assignee, nil
 }
 
-// AreAllChildrenTerminal checks if all child tasks of a parent are in terminal state.
+// GetTaskAssigneeTx is GetTaskAssignee scoped to a caller-owned transaction,
+// for a caller that must read the effective runner immediately before an
+// insert whose validity depends on it not having changed since an earlier,
+// separate read (ParentWakeReconciler.recordReceipt, scheduler_wake_reconciler.go:
+// closing the race between ListStuckParents' SELECT and this transaction's
+// run insert, where a reassignment in between would otherwise queue a run
+// for a runner that is no longer this parent's assignee).
+func (r *Repository) GetTaskAssigneeTx(ctx context.Context, tx *sqlx.Tx, taskID string) (string, error) {
+	var assignee string
+	err := tx.QueryRowxContext(ctx, tx.Rebind(
+		`SELECT `+RunnerProjection("tasks")+` FROM tasks WHERE id = ?`), taskID).Scan(&assignee)
+	if err != nil {
+		return "", err
+	}
+	return assignee, nil
+}
+
+// AreAllChildrenTerminal checks if all child tasks of a parent are in
+// terminal state. Unlike ListStuckParents (wake_receipts.go), this counts
+// every child regardless of archived_at, so an archived child stuck
+// mid-flight can block it forever — that divergence is intentional on the
+// reconciler's side (see ListStuckParents), not a bug here; do not add an
+// archived_at filter to this query to "match" it.
 func (r *Repository) AreAllChildrenTerminal(ctx context.Context, parentID string) (bool, error) {
 	var nonTerminal int
 	err := r.ro.QueryRowxContext(ctx, r.ro.Rebind(`
@@ -175,54 +264,131 @@ func (r *Repository) AreAllChildrenTerminal(ctx context.Context, parentID string
 	return nonTerminal == 0, nil
 }
 
+// ChildState is a minimal id+state pair over a parent's child tasks.
+type ChildState struct {
+	TaskID string `db:"id"`
+	State  string `db:"state"`
+}
+
+// ListChildStates returns id+state for every child of a parent task,
+// ordered by id. Callers that wake a parent once AreAllChildrenTerminal
+// reports true use this to build a wake-idempotency key that changes
+// across delegation waves — a parent that fans out again after one wave
+// completes gets a distinct child set (and therefore a distinct key), so
+// it can be woken again instead of colliding with the permanently-unique
+// {reason}:{taskID}:{agentID} key QueueRunCtx mints by default.
+func (r *Repository) ListChildStates(ctx context.Context, parentID string) ([]ChildState, error) {
+	var rows []ChildState
+	err := r.ro.SelectContext(ctx, &rows, r.ro.Rebind(`
+		SELECT id, COALESCE(state, '') AS state FROM tasks
+		WHERE parent_id = ?
+		ORDER BY id
+	`), parentID)
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []ChildState{}
+	}
+	return rows, nil
+}
+
+// ListWaveMembers returns id+state for the parent's wave members, ordered
+// by id: direct children that are not archived, not ephemeral, and not
+// automation-origin. This is the predicate
+// task/repository/sqlite.ListChildCompletionRows already applies
+// (andNotAutomationOrigin) — the one predicate all four
+// task_children_completed producers can share (docs/specs/office/
+// system-design/parent-wake-wave-identity.md, "Which children count").
+// Unlike ListChildStates, this excludes ephemeral and automation-origin
+// children as well as archived ones, so its result set is a subset of
+// ListChildStates' for the same parent.
+func (r *Repository) ListWaveMembers(ctx context.Context, parentID string) ([]ChildState, error) {
+	var rows []ChildState
+	err := r.ro.SelectContext(ctx, &rows, r.ro.Rebind(`
+		SELECT id, COALESCE(state, '') AS state FROM tasks
+		WHERE parent_id = ? AND archived_at IS NULL AND is_ephemeral = 0
+		  AND COALESCE(origin, '') != 'automation_run'
+		ORDER BY id
+	`), parentID)
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []ChildState{}
+	}
+	return rows, nil
+}
+
 // ChildSummary holds summary data for a completed child task.
 type ChildSummary struct {
-	TaskID                 string `db:"id" json:"id"`
-	Identifier             string `db:"identifier" json:"identifier"`
-	Title                  string `db:"title" json:"title"`
-	State                  string `db:"state" json:"state"`
-	AssigneeAgentProfileID string `db:"assignee_agent_profile_id" json:"assignee_agent_profile_id"`
-	LastComment            string `db:"last_comment" json:"last_comment,omitempty"`
+	TaskID      string `db:"id" json:"id"`
+	Identifier  string `db:"identifier" json:"identifier"`
+	Title       string `db:"title" json:"title"`
+	State       string `db:"state" json:"state"`
+	LastComment string `db:"last_comment" json:"last_comment,omitempty"`
 }
 
 // maxChildSummaries is the maximum number of child summaries returned.
 const maxChildSummaries = 20
 
-// maxCommentChars is the maximum length of a last-comment summary.
+// maxCommentChars is the display limit for a last-comment summary, counted in
+// Unicode code points. The query reads one code point beyond it so a caller can
+// tell a body that was cut from one that happens to end exactly at the limit.
 const maxCommentChars = 500
 
-// GetChildSummaries returns summary data for all children of a parent task.
-// Each child includes its last comment (truncated to 500 chars). Returns at
-// most 20 rows and a truncated flag indicating whether more exist.
-func (r *Repository) GetChildSummaries(ctx context.Context, parentID string) ([]ChildSummary, bool, error) {
-	// Count total children first to determine truncation.
-	var total int
-	err := r.ro.QueryRowxContext(ctx, r.ro.Rebind(
-		`SELECT COUNT(*) FROM tasks WHERE parent_id = ?`), parentID).Scan(&total)
-	if err != nil {
-		return nil, false, err
-	}
+// childSummaryRow carries the per-parent live-child count alongside each row.
+// The count rides on the rows rather than being a second statement so both come
+// from one snapshot: a child archived between two statements would otherwise
+// leave a total above the cap while the capped select already covered every
+// live child.
+type childSummaryRow struct {
+	ChildSummary
+	LiveChildCount int `db:"live_child_count"`
+}
 
-	var summaries []ChildSummary
-	err = r.ro.SelectContext(ctx, &summaries, r.ro.Rebind(`
+// GetChildSummaries returns summary data for a parent's live direct children,
+// ordered by creation time then id, at most maxChildSummaries rows, with a flag
+// reporting whether live children were left out.
+//
+// Membership is not filtered by state: a child that left a terminal state is
+// still the parent's child and is reported with the state it now holds.
+// Archived children are excluded from both the rows and the count. A parent id
+// with no tasks row yields no rows, because parent_id carries no foreign key
+// and child rows outlive a deleted parent.
+func (r *Repository) GetChildSummaries(ctx context.Context, parentID string) ([]ChildSummary, bool, error) {
+	var rows []childSummaryRow
+	err := r.ro.SelectContext(ctx, &rows, r.ro.Rebind(`
 		SELECT
 			t.id,
 			COALESCE(t.identifier, '') AS identifier,
 			COALESCE(t.title, '') AS title,
 			COALESCE(t.state, '') AS state,
-			`+RunnerProjection("t")+` AS assignee_agent_profile_id,
 			COALESCE((
 				SELECT SUBSTR(c.body, 1, ?) FROM task_comments c
-				WHERE c.task_id = t.id ORDER BY c.created_at DESC LIMIT 1
-			), '') AS last_comment
+				WHERE c.task_id = t.id
+				ORDER BY c.created_at DESC, c.id DESC LIMIT 1
+			), '') AS last_comment,
+			(
+				SELECT COUNT(*) FROM tasks lc
+				WHERE lc.parent_id = ? AND lc.archived_at IS NULL
+			) AS live_child_count
 		FROM tasks t
 		WHERE t.parent_id = ?
-		ORDER BY t.created_at
+			AND t.archived_at IS NULL
+			AND EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?)
+		ORDER BY t.created_at ASC, t.id ASC
 		LIMIT ?
-	`), maxCommentChars, parentID, maxChildSummaries)
+	`), maxCommentChars+1, parentID, parentID, parentID, maxChildSummaries)
 	if err != nil {
 		return nil, false, err
 	}
 
-	return summaries, total > maxChildSummaries, nil
+	summaries := make([]ChildSummary, 0, len(rows))
+	for _, row := range rows {
+		summaries = append(summaries, row.ChildSummary)
+	}
+	// No rows means nothing to truncate, including when the parent is gone.
+	truncated := len(rows) > 0 && rows[0].LiveChildCount > maxChildSummaries
+	return summaries, truncated, nil
 }

@@ -1,14 +1,16 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useCallback } from "react";
 import dynamic from "@/lib/routing/client-dynamic";
 import { useResponsiveBreakpoint } from "@/hooks/use-responsive-breakpoint";
+import { useRouter } from "@/lib/routing/client-router";
+import { canvasHref, type Canvas } from "@/lib/api/domains/canvas-api";
 import { SessionMobileLayout, SessionTabletLayout } from "./mobile";
 import type { Repository, RepositoryScript } from "@/lib/types/http";
 import type { Terminal } from "@/hooks/domains/session/use-terminals";
 import type { Layout } from "react-resizable-panels";
-import { isTypedTaskLaunchError } from "./simple/components/task-launch-error-entry";
-import { TaskChatLaunchError } from "./simple/components/task-chat-launch-error";
+import { useTaskCanvasLifecycleActivation } from "./dockview-canvas-activation";
+import { statusSummaryTaskError } from "@/lib/task-status-summary";
 import { useTaskLaunchErrorContext } from "./task-launch-error-context";
 
 // Re-export for backwards compatibility
@@ -21,6 +23,7 @@ const DockviewDesktopLayout = dynamic(
 );
 
 type TaskLayoutProps = {
+  taskId?: string | null;
   workspaceId: string | null;
   workflowId: string | null;
   sessionId?: string | null;
@@ -42,9 +45,12 @@ type TaskLayoutProps = {
   remoteStatusError?: string | null;
   initialLayout?: string | null;
   isArchived?: boolean;
+  onTaskUnarchived?: (taskId: string) => void;
+  taskCanvases?: Canvas[];
 };
 
 export const TaskLayout = memo(function TaskLayout({
+  taskId = null,
   workspaceId,
   workflowId,
   sessionId = null,
@@ -65,28 +71,18 @@ export const TaskLayout = memo(function TaskLayout({
   remoteStatusError,
   initialLayout,
   isArchived,
+  onTaskUnarchived,
+  taskCanvases = [],
 }: TaskLayoutProps) {
   const { isMobile, usesDesktopWorkbench, isFullDesktop } = useResponsiveBreakpoint();
   const launchErrorContext = useTaskLaunchErrorContext();
-  const activeLaunchError = launchErrorContext?.statusSummary?.active_error;
-
-  if (launchErrorContext && !sessionId && isTypedTaskLaunchError(activeLaunchError)) {
-    return (
-      <div
-        className="flex h-full min-h-0 min-w-0 flex-col overflow-auto px-4"
-        data-testid="session-chat"
-      >
-        <TaskChatLaunchError
-          taskId={launchErrorContext.taskId}
-          workspaceId={launchErrorContext.workspaceId}
-          statusSummary={launchErrorContext.statusSummary}
-          runErrors={[]}
-          repositories={launchErrorContext.repositories}
-        />
-      </div>
-    );
-  }
-
+  const hasSharedTaskError = Boolean(statusSummaryTaskError(launchErrorContext?.statusSummary));
+  useTaskCanvasLifecycleActivation({ taskId, workspaceId, isMobile });
+  const router = useRouter();
+  const onOpenCanvas = useCallback(
+    (canvasId: string) => router.push(canvasHref(canvasId)),
+    [router],
+  );
   // Mobile layout
   if (isMobile) {
     return (
@@ -106,6 +102,10 @@ export const TaskLayout = memo(function TaskLayout({
         remoteCheckedAt={remoteCheckedAt}
         remoteStatusError={remoteStatusError}
         isArchived={isArchived}
+        onTaskUnarchived={onTaskUnarchived}
+        taskCanvases={taskCanvases}
+        onOpenCanvas={onOpenCanvas}
+        hasSharedTaskError={hasSharedTaskError}
       />
     );
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   IconArrowUpCircle,
   IconChevronRight,
@@ -16,8 +16,10 @@ import { PluginRepoLink } from "./plugin-repo-link";
 import { PluginStatusBadge } from "./plugin-status-badge";
 import { PluginErrorDiagnostic } from "./plugin-error-diagnostic";
 import { PluginUninstallConfirmation } from "./uninstall-plugin-dialog";
+import { useResponsiveBreakpoint } from "@/hooks/use-responsive-breakpoint";
 import type { MarketplaceEntry, PluginRecord } from "@/lib/types/plugins";
 import { SETTINGS_TYPOGRAPHY } from "@/components/settings/settings-typography";
+import { controlSizingClassName } from "@kandev/ui/control-sizing";
 
 /**
  * The row's view of its marketplace-update status, computed by
@@ -57,6 +59,8 @@ type PluginRowProps = {
   autoUpdateBusy: boolean;
   /** True when the plugin declares required settings the operator has not filled in. */
   needsSetup?: boolean;
+  /** Whether the current user may mutate instance-global plugin state. */
+  canManage?: boolean;
   /** Fine pointers use an anchored popover; coarse pointers use inline row actions. */
   isFinePointer?: boolean;
   /** True while this plugin's uninstall request is in flight. */
@@ -87,6 +91,7 @@ export function PluginRow({
   autoUpdateDefault,
   autoUpdateBusy,
   needsSetup = false,
+  canManage = true,
   isFinePointer = true,
   uninstallBusy = false,
   onEnable,
@@ -108,6 +113,10 @@ export function PluginRow({
     confirmUninstall,
   } = usePluginUninstallConfirmation(plugin, onConfirmUninstall);
 
+  useEffect(() => {
+    if (!canManage) setConfirmingUninstall(false);
+  }, [canManage, setConfirmingUninstall]);
+
   return (
     <div
       data-testid={`plugin-row-${plugin.id}`}
@@ -118,6 +127,7 @@ export function PluginRow({
         update={update}
         autoUpdateDefault={autoUpdateDefault}
         needsSetup={needsSetup}
+        canManage={canManage}
         isFinePointer={isFinePointer}
         mutationBusy={mutationBusy}
         canEnable={canEnable}
@@ -130,17 +140,19 @@ export function PluginRow({
         onUpdate={onUpdate}
         onSetAutoUpdate={onSetAutoUpdate}
       />
-      <div className="relative z-10">
-        <PluginUninstallConfirmation
-          target={plugin}
-          open={confirmingUninstall}
-          isFinePointer={isFinePointer}
-          anchorRef={uninstallAnchorRef}
-          onOpenChange={setConfirmingUninstall}
-          onCancel={cancelUninstall}
-          onConfirm={confirmUninstall}
-        />
-      </div>
+      {canManage && (
+        <div className="relative z-10">
+          <PluginUninstallConfirmation
+            target={plugin}
+            open={confirmingUninstall}
+            isFinePointer={isFinePointer}
+            anchorRef={uninstallAnchorRef}
+            onOpenChange={setConfirmingUninstall}
+            onCancel={cancelUninstall}
+            onConfirm={confirmUninstall}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -150,6 +162,7 @@ type PluginRowContentProps = {
   update?: PluginRowUpdateState;
   autoUpdateDefault: boolean;
   needsSetup: boolean;
+  canManage: boolean;
   isFinePointer: boolean;
   mutationBusy: boolean;
   canEnable: boolean;
@@ -168,6 +181,7 @@ function PluginRowContent({
   update,
   autoUpdateDefault,
   needsSetup,
+  canManage,
   isFinePointer,
   mutationBusy,
   canEnable,
@@ -201,20 +215,22 @@ function PluginRowContent({
           <PluginRowIdentity plugin={plugin} needsSetup={needsSetup} update={update} />
 
           <div className="flex items-center gap-2 shrink-0">
-            <PluginRowActions
-              plugin={plugin}
-              busy={mutationBusy}
-              update={update}
-              canEnable={canEnable}
-              canDisable={canDisable}
-              isFinePointer={isFinePointer}
-              confirmingUninstall={confirmingUninstall}
-              uninstallAnchorRef={uninstallAnchorRef}
-              onEnable={onEnable}
-              onDisable={onDisable}
-              onUninstall={onUninstall}
-              onUpdate={onUpdate}
-            />
+            {canManage && (
+              <PluginRowActions
+                plugin={plugin}
+                busy={mutationBusy}
+                update={update}
+                canEnable={canEnable}
+                canDisable={canDisable}
+                isFinePointer={isFinePointer}
+                confirmingUninstall={confirmingUninstall}
+                uninstallAnchorRef={uninstallAnchorRef}
+                onEnable={onEnable}
+                onDisable={onDisable}
+                onUninstall={onUninstall}
+                onUpdate={onUpdate}
+              />
+            )}
             <IconChevronRight
               aria-hidden
               className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
@@ -245,12 +261,14 @@ function PluginRowContent({
           </div>
         )}
 
-        <PluginAutoUpdateRow
-          plugin={plugin}
-          autoUpdateDefault={autoUpdateDefault}
-          busy={mutationBusy}
-          onSetAutoUpdate={onSetAutoUpdate}
-        />
+        {canManage && (
+          <PluginAutoUpdateRow
+            plugin={plugin}
+            autoUpdateDefault={autoUpdateDefault}
+            busy={mutationBusy}
+            onSetAutoUpdate={onSetAutoUpdate}
+          />
+        )}
       </div>
     </>
   );
@@ -472,34 +490,27 @@ function PluginRowActions({
   onUpdate,
 }: PluginRowActionsProps) {
   const { t } = useTranslation();
+  const { isMobile } = useResponsiveBreakpoint();
   const updateEntry = update?.hasUpdate ? update.latest : undefined;
   return (
     <div className="relative z-10 flex flex-wrap items-center gap-2 shrink-0">
       {updateEntry && onUpdate && (
-        <Button
-          variant="default"
-          size="sm"
-          data-testid={`plugin-update-${plugin.id}`}
-          className="cursor-pointer gap-1 min-h-11 sm:min-h-0"
-          aria-busy={update?.busy ? "true" : undefined}
+        <PluginUpdateButton
+          pluginId={plugin.id}
+          entry={updateEntry}
+          updating={!!update?.busy}
           disabled={busy}
-          onClick={() => onUpdate(updateEntry)}
-        >
-          {update?.busy ? (
-            <IconLoader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <IconArrowUpCircle className="h-4 w-4" />
-          )}
-          {update?.busy
-            ? t("plugins:updating")
-            : t("plugins:updateToVersion", { version: updateEntry.version })}
-        </Button>
+          onUpdate={onUpdate}
+        />
       )}
       {canEnable && (
         <Button
           variant="outline"
           size="sm"
-          className="cursor-pointer min-h-11 sm:min-h-0"
+          className={controlSizingClassName(
+            "compact",
+            "cursor-pointer max-md:min-h-11 [@media(pointer:coarse)]:min-h-11",
+          )}
           disabled={busy}
           onClick={() => onEnable(plugin)}
         >
@@ -510,19 +521,25 @@ function PluginRowActions({
         <Button
           variant="outline"
           size="sm"
-          className="cursor-pointer min-h-11 sm:min-h-0"
+          className={controlSizingClassName(
+            "compact",
+            "cursor-pointer max-md:min-h-11 [@media(pointer:coarse)]:min-h-11",
+          )}
           disabled={busy}
           onClick={() => onDisable(plugin)}
         >
           {t("plugins:disable")}
         </Button>
       )}
-      {(isFinePointer || !confirmingUninstall) && (
+      {(isMobile || isFinePointer || !confirmingUninstall) && (
         <Button
           ref={uninstallAnchorRef}
           variant="ghost"
           size="sm"
-          className="cursor-pointer min-h-11 text-destructive hover:text-destructive sm:min-h-0"
+          className={controlSizingClassName(
+            "compact",
+            "cursor-pointer text-destructive hover:text-destructive max-md:min-h-11 [@media(pointer:coarse)]:min-h-11",
+          )}
           disabled={busy}
           onClick={() => onUninstall(plugin)}
         >
@@ -533,11 +550,51 @@ function PluginRowActions({
         href={`/settings/plugins/${encodeURIComponent(plugin.id)}`}
         data-testid={`plugin-settings-link-${plugin.id}`}
         aria-label={t("plugins:openSettingsFor", { name: plugin.display_name })}
-        className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer sm:min-h-0"
+        className={controlSizingClassName(
+          "compact",
+          "inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer max-md:min-h-11 [@media(pointer:coarse)]:min-h-11",
+        )}
       >
         <IconSettings className="h-4 w-4" aria-hidden />
         {t("plugins:settings")}
       </Link>
     </div>
+  );
+}
+
+function PluginUpdateButton({
+  pluginId,
+  entry,
+  updating,
+  disabled,
+  onUpdate,
+}: {
+  pluginId: string;
+  entry: MarketplaceEntry;
+  updating: boolean;
+  disabled: boolean;
+  onUpdate: (entry: MarketplaceEntry) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Button
+      variant="default"
+      size="sm"
+      data-testid={`plugin-update-${pluginId}`}
+      className={controlSizingClassName(
+        "compact",
+        "cursor-pointer gap-1 max-md:min-h-11 [@media(pointer:coarse)]:min-h-11",
+      )}
+      aria-busy={updating ? "true" : undefined}
+      disabled={disabled}
+      onClick={() => onUpdate(entry)}
+    >
+      {updating ? (
+        <IconLoader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <IconArrowUpCircle className="h-4 w-4" />
+      )}
+      {updating ? t("plugins:updating") : t("plugins:updateToVersion", { version: entry.version })}
+    </Button>
   );
 }

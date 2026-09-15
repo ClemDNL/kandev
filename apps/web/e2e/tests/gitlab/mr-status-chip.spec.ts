@@ -66,15 +66,26 @@ async function openTask(
   testPage: import("@playwright/test").Page,
   session: SessionPage,
   taskId: string,
+  options: { expectedMrCount?: number } = {},
 ) {
   await testPage.goto(`/t/${taskId}`);
   await session.waitForLoad();
   // The shell hydrates the workspace MR map once per document. A link created
   // immediately before navigation can miss that first snapshot even though
-  // the task details already show the association. Reload once so the chip
-  // observes the same persisted link as the rest of the task page.
-  await testPage.reload();
-  await session.waitForLoad();
+  // the task details already show the association. Re-drive document
+  // hydration until the linked-MR chip observes the persisted map; one fixed
+  // reload can race the same snapshot again under CI load.
+  await expect(async () => {
+    await testPage.reload();
+    await session.waitForLoad();
+    const chip = session.mrStatusChip();
+    await expect(chip).toBeVisible({ timeout: 5_000 });
+    if (options.expectedMrCount !== undefined) {
+      await expect(chip).toHaveAttribute("data-mr-count", String(options.expectedMrCount), {
+        timeout: 5_000,
+      });
+    }
+  }).toPass({ timeout: 30_000 });
 }
 
 test.describe("GitLab MR status chip", () => {
@@ -141,7 +152,7 @@ test.describe("GitLab MR status chip", () => {
     await linkMR(apiClient, seedData, task.id, AWAITING_IID);
 
     const session = new SessionPage(testPage);
-    await openTask(testPage, session, task.id);
+    await openTask(testPage, session, task.id, { expectedMrCount: 2 });
 
     const chip = session.mrStatusChip();
     await expect(chip).toBeVisible({ timeout: 15_000 });
@@ -279,11 +290,11 @@ test.describe("GitLab MR status chip", () => {
     expect(options.mr_options?.find((o) => o.mr_iid === IDLE_IID)?.auto_fix_enabled).toBe(false);
 
     const session = new SessionPage(testPage);
-    await openTask(testPage, session, task.id);
+    await openTask(testPage, session, task.id, { expectedMrCount: 2 });
 
     const chip = session.mrStatusChip();
     await expect(chip).toBeVisible({ timeout: 15_000 });
-    await expect(chip).toHaveAttribute("data-mr-count", "2");
+    await expect(chip).toHaveAttribute("data-mr-count", "2", { timeout: 15_000 });
     const autoFixBadge = chip.getByTestId("mr-status-auto-fix-chip");
     await expect(autoFixBadge).toBeVisible();
     // The round comes from the armed MR, which has no fix rounds yet.

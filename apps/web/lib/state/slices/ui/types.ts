@@ -5,10 +5,17 @@ import type {
   FilterClause,
   GroupKey,
   SidebarSliceState,
+  SidebarTaskRowPresentation,
   SidebarView,
   SidebarViewDraft,
   SortSpec,
 } from "./sidebar-view-types";
+import type {
+  ThreadFilterClause,
+  ThreadSortSpec,
+  ThreadViewSliceState,
+  ThreadView,
+} from "./thread-view-types";
 
 export type PreviewStage = "closed" | "logs" | "preview";
 export type PreviewViewMode = "preview" | "output";
@@ -111,6 +118,20 @@ export type SystemHealthState = {
 
 export type QuickChatSessionKind = "chat" | "config";
 
+export type QuickChatSelection = Partial<Record<QuickChatSessionKind, string>>;
+
+export type QuickChatSelectionByWorkspace = Record<string, QuickChatSelection>;
+
+export type QuickChatSelectionOrder = string[];
+
+export type QuickChatPendingOpen = {
+  workspaceId: string;
+  kind: QuickChatSessionKind;
+  selectionRevision: number;
+  /** Effective order captured by the launcher while the authoritative list is pending. */
+  tabOrder?: QuickChatSelectionOrder;
+};
+
 export type QuickTerminalStatus = "connecting" | "running" | "exited" | "error";
 
 export type QuickTerminalTab = {
@@ -167,6 +188,22 @@ export type QuickChatState = {
   sessionOwnership: Record<string, QuickChatSessionOwnership>;
   syncRevisionByWorkspace: Record<string, number>;
   tombstonedSessions: Record<string, QuickChatSessionTombstone>;
+  /** Optimistic mixed-tab order keyed by workspace until the save settles. */
+  tabOrderByWorkspace: Record<string, string[]>;
+  tabOrderSyncErrorByWorkspace: Record<string, string | null>;
+  tabOrderSyncPendingByWorkspace: Record<string, boolean>;
+  /** Browser-local last explicit conversation selection by workspace and kind. */
+  rememberedSelectionByWorkspace: QuickChatSelectionByWorkspace;
+  /** Most recently touched workspace first, for bounded browser storage. */
+  rememberedSelectionOrder: QuickChatSelectionOrder;
+  /** Null means the current authenticated identity cannot use browser storage. */
+  selectionStorageIdentity: string | null;
+  /** A workspace is ready only after an accepted boot or list snapshot. */
+  selectionReadyByWorkspace: Record<string, boolean>;
+  /** Monotonic revisions invalidate pending generic opens after user actions. */
+  selectionRevisionByWorkspace: Record<string, number>;
+  /** Generic launcher request waiting for an authoritative workspace list. */
+  pendingOpen: QuickChatPendingOpen | null;
 };
 
 export type SessionFailureNotification = {
@@ -285,6 +322,7 @@ export type UISliceState = {
   updateAvailableNotification: UpdateAvailableNotification | null;
   bottomTerminal: BottomTerminalState;
   sidebarViews: SidebarSliceState;
+  threadViews: ThreadViewSliceState;
   /** Parent task IDs whose subtasks are collapsed in the sidebar. Tab-scoped (sessionStorage). */
   collapsedSubtaskParents: string[];
   /** Task ID currently shown in the kanban preview side-panel, or null if closed. */
@@ -375,7 +413,24 @@ export type UISliceActions = {
   recordQuickChatSettled: (sessionId: string, updatedAt: string) => boolean;
   /** Removes a server-backed quick-chat session and suppresses late task events. */
   removeQuickChatSession: (sessionId: string) => void;
+  /** Sets the optimistic mixed conversation/terminal order for a workspace. */
+  setQuickChatTabOrder: (workspaceId: string, order: string[]) => void;
+  /** Clears a matching optimistic order after its authoritative save succeeds. */
+  clearQuickChatTabOrder: (workspaceId: string, expectedOrder: string[]) => void;
+  /** Updates the pending/error state for a workspace order save. */
+  setQuickChatTabOrderSyncState: (
+    workspaceId: string,
+    state: { pending: boolean; error: string | null },
+  ) => void;
   setQuickChatInitialPrompt: (sessionId: string, prompt?: string) => void;
+  /** Opens Quick Chat after the requested workspace list becomes authoritative. */
+  requestQuickChatOpen: (
+    workspaceId: string,
+    kind?: QuickChatSessionKind,
+    tabOrder?: QuickChatSelectionOrder,
+  ) => void;
+  /** Loads the browser-local selection map for a new authentication identity. */
+  setQuickChatSelectionIdentity: (identity: string | null) => void;
   setSessionFailureNotification: (n: SessionFailureNotification | null) => void;
   setTaskDeletedNotification: (n: TaskDeletedNotification | null) => void;
   setUpdateAvailableNotification: (n: UpdateAvailableNotification | null) => void;
@@ -385,7 +440,12 @@ export type UISliceActions = {
   setSidebarActiveView: (viewId: string) => void;
   createSidebarView: () => string | null;
   updateSidebarDraft: (
-    patch: Partial<{ filters: FilterClause[]; sort: SortSpec; group: GroupKey }>,
+    patch: Partial<{
+      filters: FilterClause[];
+      sort: SortSpec;
+      group: GroupKey;
+      taskRow: SidebarTaskRowPresentation;
+    }>,
   ) => void;
   saveSidebarDraftAs: (name: string) => void;
   saveSidebarDraftOverwrite: () => void;
@@ -397,6 +457,27 @@ export type UISliceActions = {
   toggleSidebarGroupCollapsed: (viewId: string, groupKey: string) => void;
   toggleSubtaskCollapsed: (parentTaskId: string) => void;
   clearSidebarSyncError: () => void;
+  setThreadActiveView: (viewId: string) => void;
+  createThreadView: () => string | null;
+  updateThreadViewDraft: (
+    patch: Partial<{
+      taskScope: ThreadView["taskScope"];
+      filters: ThreadFilterClause[];
+      sort: ThreadSortSpec;
+      maxColumns: number | null;
+      layout: ThreadView["layout"];
+      autoHideComposer: boolean;
+    }>,
+  ) => void;
+  saveThreadViewDraftAs: (name: string) => void;
+  saveThreadViewDraftOverwrite: () => void;
+  discardThreadViewDraft: () => void;
+  deleteThreadView: (viewId: string) => void;
+  renameThreadView: (viewId: string, name: string) => void;
+  duplicateThreadView: (viewId: string, name: string) => void;
+  reapplyThreadViewSort: () => void;
+  retryThreadViewSync: () => void;
+  clearThreadViewSyncError: () => void;
   clearSidebarTaskPrefsSyncError: () => void;
   setKanbanPreviewedTaskId: (taskId: string | null) => void;
   togglePinnedTask: (taskId: string) => void;

@@ -15,6 +15,7 @@ import {
 } from "@kandev/ui/alert-dialog";
 import { ActionConfirmPopover } from "@/components/confirmation/action-confirm-popover";
 import { InlineConfirmActions } from "@/components/confirmation/inline-confirm-actions";
+import { MobileActionConfirmation } from "@/components/confirmation/mobile-action-confirmation";
 import { useAppStore } from "@/components/state-provider";
 import type {
   ActiveSessionInfo,
@@ -23,6 +24,7 @@ import type {
   WatcherReference,
   UtilityAgentReference,
 } from "@/lib/types/agent-profile-errors";
+import { settingsActionClassName } from "@/components/settings/settings-control";
 
 // The watcher `kind` values are the wire enum and are never translated; only
 // their labels are copy, so they travel as catalog keys and resolve at render.
@@ -38,6 +40,8 @@ const DELETE_PROFILE_DESCRIPTION_KEY = "agents:deleteAgentProfileDescription";
 const CANCEL_LABEL_KEY = "common:cancel";
 
 type AgentProfileDeleteConfirmationProps = {
+  profileId: string;
+  profileName: string;
   open: boolean;
   isFinePointer: boolean;
   anchorRef: RefObject<HTMLElement | null>;
@@ -51,6 +55,8 @@ type AgentProfileDeleteConfirmationProps = {
  * AgentProfileDeleteConflictDialog because its dependency lists need a modal.
  */
 export function AgentProfileDeleteConfirmation({
+  profileId,
+  profileName,
   open,
   isFinePointer,
   anchorRef,
@@ -59,26 +65,21 @@ export function AgentProfileDeleteConfirmation({
   onConfirm,
 }: AgentProfileDeleteConfirmationProps) {
   const { t } = useTranslation();
-  if (isFinePointer) {
-    return (
-      <ActionConfirmPopover
-        open={open}
-        anchorRef={anchorRef}
-        title={t(DELETE_PROFILE_TITLE_KEY)}
-        description={t(DELETE_PROFILE_DESCRIPTION_KEY)}
-        cancelLabel={t(CANCEL_LABEL_KEY)}
-        confirmLabel={t("agents:delete")}
-        confirmTestId="agent-profile-delete-confirm"
-        testId="agent-profile-delete-confirm-popover"
-        onOpenChange={onOpenChange}
-        onCancel={onCancel}
-        onConfirm={onConfirm}
-      />
-    );
-  }
-
-  if (!open) return null;
-  return (
+  const fallback = isFinePointer ? (
+    <ActionConfirmPopover
+      open={open}
+      anchorRef={anchorRef}
+      title={t(DELETE_PROFILE_TITLE_KEY)}
+      description={t(DELETE_PROFILE_DESCRIPTION_KEY)}
+      cancelLabel={t(CANCEL_LABEL_KEY)}
+      confirmLabel={t("agents:delete")}
+      confirmTestId="agent-profile-delete-confirm"
+      testId="agent-profile-delete-confirm-popover"
+      onOpenChange={onOpenChange}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
+  ) : (
     <InlineConfirmActions
       density="touch"
       testId="agent-profile-delete-inline-confirmation"
@@ -90,6 +91,23 @@ export function AgentProfileDeleteConfirmation({
       onCancel={onCancel}
       onClose={() => onOpenChange(false)}
       onConfirm={onConfirm}
+    />
+  );
+  return (
+    <MobileActionConfirmation
+      open={open}
+      targetKey={profileId}
+      title={t(DELETE_PROFILE_TITLE_KEY)}
+      subject={profileName}
+      description={t(DELETE_PROFILE_DESCRIPTION_KEY)}
+      cancelLabel={t(CANCEL_LABEL_KEY)}
+      confirmLabel={t("agents:delete")}
+      confirmTestId="agent-profile-delete-confirm"
+      focusReturnRef={anchorRef}
+      onOpenChange={onOpenChange}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+      fallback={fallback}
     />
   );
 }
@@ -171,49 +189,61 @@ export function AgentProfileDeleteConflictDialog({
 
   return (
     <AlertDialog open={!!conflict} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        data-testid="agent-profile-delete-conflict-dialog"
+        data-layout="contained"
+        className="max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>
             {hasHardBlockers ? t("agents:cannotDeleteAgentProfile") : t(DELETE_PROFILE_TITLE_KEY)}
           </AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div>
-              <p>{t("agents:profileInUseIntro")}</p>
-              <SessionConflictSection
-                title={t("agents:conflictTasksTitle")}
-                sessions={tasks}
-                fallback={t("agents:untitledTask")}
-              />
-              <SessionConflictSection
-                title={t("agents:conflictQuickChatsTitle")}
-                sessions={quickChats}
-                fallback={t("agents:untitledQuickChat")}
-              />
-              <WatcherConflictSection watchersByKind={watchersByKind} />
-              <RoutingTierConflictSection
-                routingTiers={routingTiers}
-                workspaceLabels={new Map(workspaces.map((w) => [w.id, w.name]))}
-                providerLabels={new Map(providers.map((p) => [p.id, p.name]))}
-              />
-              <AutomationConflictSection
-                automations={automations}
-                workspaceLabels={new Map(workspaces.map((w) => [w.id, w.name]))}
-              />
-              <UtilityAgentConflictSection utilityAgents={utilityAgents} />
-              {hasHardBlockers ? (
-                <p className="mt-2">{t("agents:changeTierMappingsFirst")}</p>
-              ) : (
-                <p className="mt-2">{t("agents:deleteAnywayConsequences")}</p>
-              )}
-            </div>
-          </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel className="cursor-pointer">{t(CANCEL_LABEL_KEY)}</AlertDialogCancel>
+        <AlertDialogDescription
+          asChild
+          data-testid="agent-profile-delete-conflict-body"
+          className="min-h-0 min-w-0 space-y-2 overflow-x-hidden overflow-y-auto overscroll-contain text-left"
+        >
+          <div>
+            <p>{t("agents:profileInUseIntro")}</p>
+            <SessionConflictSection
+              title={t("agents:conflictTasksTitle")}
+              sessions={tasks}
+              fallback={t("agents:untitledTask")}
+            />
+            <SessionConflictSection
+              title={t("agents:conflictQuickChatsTitle")}
+              sessions={quickChats}
+              fallback={t("agents:untitledQuickChat")}
+            />
+            <WatcherConflictSection watchersByKind={watchersByKind} />
+            <RoutingTierConflictSection
+              routingTiers={routingTiers}
+              workspaceLabels={new Map(workspaces.map((w) => [w.id, w.name]))}
+              providerLabels={new Map(providers.map((p) => [p.id, p.name]))}
+            />
+            <AutomationConflictSection
+              automations={automations}
+              workspaceLabels={new Map(workspaces.map((w) => [w.id, w.name]))}
+            />
+            <UtilityAgentConflictSection utilityAgents={utilityAgents} />
+            {hasHardBlockers ? (
+              <p>{t("agents:changeTierMappingsFirst")}</p>
+            ) : (
+              <p>{t("agents:deleteAnywayConsequences")}</p>
+            )}
+          </div>
+        </AlertDialogDescription>
+        <AlertDialogFooter data-testid="agent-profile-delete-conflict-footer">
+          <AlertDialogCancel className={settingsActionClassName("w-full cursor-pointer sm:w-auto")}>
+            {t(CANCEL_LABEL_KEY)}
+          </AlertDialogCancel>
           {hasHardBlockers ? null : (
             <AlertDialogAction
               onClick={onConfirm}
-              className="cursor-pointer bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className={settingsActionClassName(
+                "w-full cursor-pointer bg-destructive text-destructive-foreground hover:bg-destructive/90 sm:w-auto",
+              )}
             >
               {t("agents:deleteAnyway")}
             </AlertDialogAction>
@@ -232,9 +262,9 @@ function UtilityAgentConflictSection({
   const { t } = useTranslation();
   if (utilityAgents.length === 0) return null;
   return (
-    <div className="mt-2" data-testid="profile-conflict-utility-agents">
+    <div className="space-y-1" data-testid="profile-conflict-utility-agents">
       <p className="font-medium text-sm">{t("agents:conflictUtilityAgentsTitle")}</p>
-      <ul className="list-disc list-inside mt-1 space-y-0.5">
+      <ul className="list-disc list-inside space-y-0.5">
         {utilityAgents.map((agent) => (
           <li key={agent.id} className="text-sm">
             {agent.name || agent.id}
@@ -256,9 +286,9 @@ function SessionConflictSection({
 }) {
   if (sessions.length === 0) return null;
   return (
-    <div className="mt-2">
+    <div className="space-y-1">
       <p className="font-medium text-sm">{title}</p>
-      <ul className="list-disc list-inside mt-1 space-y-0.5">
+      <ul className="list-disc list-inside space-y-0.5">
         {sessions.map((t) => (
           <li key={t.task_id} className="text-sm">
             {t.task_title || fallback}
@@ -278,9 +308,9 @@ function WatcherConflictSection({
   const entries = Object.entries(watchersByKind);
   if (entries.length === 0) return null;
   return (
-    <div className="mt-2">
+    <div className="space-y-1">
       <p className="font-medium text-sm">{t("agents:conflictWatchersTitle")}</p>
-      <ul className="list-disc list-inside mt-1 space-y-0.5">
+      <ul className="list-disc list-inside space-y-0.5">
         {entries.map(([kind, items]) => (
           <li key={kind} className="text-sm">
             <span className="font-medium">
@@ -307,9 +337,9 @@ function AutomationConflictSection({
   const { t } = useTranslation();
   if (automations.length === 0) return null;
   return (
-    <div className="mt-2" data-testid="delete-conflict-automations">
+    <div className="space-y-1" data-testid="delete-conflict-automations">
       <p className="font-medium text-sm">{t("agents:conflictAutomationsTitle")}</p>
-      <ul className="list-disc list-inside mt-1 space-y-0.5">
+      <ul className="list-disc list-inside space-y-0.5">
         {automations.map((ref) => (
           <li key={ref.id} className="text-sm">
             <Trans
@@ -340,9 +370,9 @@ function RoutingTierConflictSection({
   const { t } = useTranslation();
   if (routingTiers.length === 0) return null;
   return (
-    <div className="mt-2">
+    <div className="space-y-1">
       <p className="font-medium text-sm">{t("agents:conflictTierMappingsTitle")}</p>
-      <ul className="list-disc list-inside mt-1 space-y-0.5">
+      <ul className="list-disc list-inside space-y-0.5">
         {routingTiers.map((ref) => (
           <li key={`${ref.workspace_id}-${ref.provider_id}-${ref.tier}`} className="text-sm">
             <Trans

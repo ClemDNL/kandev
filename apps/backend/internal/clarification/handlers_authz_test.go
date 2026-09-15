@@ -40,8 +40,8 @@ func setupAuthzHandler(t *testing.T, msgs map[string][]*taskmodels.Message, auth
 	repo := &stubMessageStore{messages: msgs}
 	eventBus := &stubEventBus{}
 	messageCreator := &stubMessageCreator{}
-	resolver := NewResolver(store, repo, messageCreator, authorizer, eventBus, eventBus, logger.Default())
-	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default())
+	resolver := NewResolver(store, repo, messageCreator, authorizer, eventBus, eventBus, nil, logger.Default())
+	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default(), nil, nil)
 	return h, store
 }
 
@@ -295,8 +295,8 @@ func TestHttpGetRequest_RepositoryFailure_500NotSilent404(t *testing.T) {
 	store := NewStore(time.Minute)
 	eventBus := &stubEventBus{}
 	messageCreator := &stubMessageCreator{}
-	resolver := NewResolver(store, repo, messageCreator, &stubAuthorizer{}, eventBus, eventBus, logger.Default())
-	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default())
+	resolver := NewResolver(store, repo, messageCreator, &stubAuthorizer{}, eventBus, eventBus, nil, logger.Default())
+	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default(), nil, nil)
 
 	rec := runGet(t, h, "pending-repo-failure")
 	if rec.Code != http.StatusInternalServerError {
@@ -313,8 +313,8 @@ func TestHttpWaitForResponse_RepositoryFailure_500NotSilent404(t *testing.T) {
 	store := NewStore(time.Minute)
 	eventBus := &stubEventBus{}
 	messageCreator := &stubMessageCreator{}
-	resolver := NewResolver(store, repo, messageCreator, &stubAuthorizer{}, eventBus, eventBus, logger.Default())
-	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default())
+	resolver := NewResolver(store, repo, messageCreator, &stubAuthorizer{}, eventBus, eventBus, nil, logger.Default())
+	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default(), nil, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -333,8 +333,8 @@ func TestHttpCancelRequest_RepositoryFailure_500NotSilent404(t *testing.T) {
 	store := NewStore(time.Minute)
 	eventBus := &stubEventBus{}
 	messageCreator := &stubMessageCreator{}
-	resolver := NewResolver(store, repo, messageCreator, &stubAuthorizer{}, eventBus, eventBus, logger.Default())
-	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default())
+	resolver := NewResolver(store, repo, messageCreator, &stubAuthorizer{}, eventBus, eventBus, nil, logger.Default())
+	h := NewHandlers(store, nil, messageCreator, repo, eventBus, resolver, logger.Default(), nil, nil)
 
 	rec := runCancel(t, h, "pending-repo-failure")
 	if rec.Code != http.StatusInternalServerError {
