@@ -69,16 +69,6 @@ export async function expectSilentRestartRestoration(
   snapshot: SilentRestartSnapshot,
   traffic: readonly GatewayTrafficFrame[],
 ): Promise<void> {
-  await expectRestartConversationIdentity({
-    page,
-    api,
-    taskId,
-    snapshot,
-    traffic,
-    expectedState: "WAITING_FOR_INPUT",
-    executionDisposition: "replaced",
-  });
-
   await expect
     .poll(
       async () => {
@@ -94,6 +84,16 @@ export async function expectSilentRestartRestoration(
       },
     )
     .toBe("restored");
+
+  await expectRestartConversationIdentity({
+    page,
+    api,
+    taskId,
+    snapshot,
+    traffic,
+    expectedState: "WAITING_FOR_INPUT",
+    executionDisposition: "replaced",
+  });
 
   for (const testId of ["failed-session-banner", "delivery-recovery-result"]) {
     await expect(page.getByTestId(testId)).toHaveCount(0);

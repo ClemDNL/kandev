@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	agentctl "github.com/kandev/kandev/internal/agent/runtime/agentctl"
 	"github.com/kandev/kandev/internal/agentctl/journal"
 	"github.com/kandev/kandev/internal/task/models"
+	"github.com/kandev/kandev/internal/task/repository/repoerrors"
 )
 
 var (
@@ -90,6 +92,14 @@ type agentDeliverySubmissionReader interface {
 
 type agentDeliverySubmissionLister interface {
 	ListAgentDeliverySubmissions(context.Context, string) ([]*models.AgentDeliverySubmission, error)
+}
+
+type agentDeliverySubmissionPager interface {
+	ListAgentDeliverySubmissionsPage(context.Context, string, *time.Time, string, int) ([]*models.AgentDeliverySubmission, error)
+}
+
+type agentDeliverySubmissionMetadataReader interface {
+	GetAgentDeliverySubmissionMetadata(context.Context, string) (*models.AgentDeliverySubmission, error)
 }
 
 type agentDeliveryPeerSubmissionReader interface {
@@ -299,7 +309,7 @@ func restoreInitialPromptSubmission(
 	// gives Stop and replay one exact peer-owned target; arbitrary peer
 	// submissions without SQL evidence remain blocked below.
 	execution.setDeliverySubmissionID(activePeer[0].ID)
-	return true, nil
+	return true, restoreRecoveredPromptTurnBinding(execution, activePeer[0].ID)
 }
 
 func (m *Manager) restoreRecoveredBackendSubmission(
@@ -424,6 +434,9 @@ func activeBackendSubmissions(
 	delivery AgentDeliveryRepository,
 	sessionID string,
 ) ([]*models.AgentDeliverySubmission, error) {
+	if pager, ok := delivery.(agentDeliverySubmissionPager); ok {
+		return activeBackendSubmissionPages(ctx, pager, sessionID)
+	}
 	lister, ok := delivery.(agentDeliverySubmissionLister)
 	if !ok {
 		return nil, nil
@@ -439,6 +452,34 @@ func activeBackendSubmissions(
 		}
 	}
 	return active, nil
+}
+
+func activeBackendSubmissionPages(
+	ctx context.Context,
+	pager agentDeliverySubmissionPager,
+	sessionID string,
+) ([]*models.AgentDeliverySubmission, error) {
+	const pageSize = 128
+	var active []*models.AgentDeliverySubmission
+	var afterCreatedAt *time.Time
+	afterID := ""
+	for {
+		page, err := pager.ListAgentDeliverySubmissionsPage(ctx, sessionID, afterCreatedAt, afterID, pageSize)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w: page SQL submissions: %v", ErrDurableAdoptionBlocked, ErrDurableAdoptionEvidenceUnavailable, err)
+		}
+		for _, submission := range page {
+			if submission != nil && deliverySubmissionNeedsRecovery(submission.State) {
+				active = append(active, submission)
+			}
+		}
+		if len(page) < pageSize {
+			return active, nil
+		}
+		last := page[len(page)-1]
+		createdAt := last.CreatedAt
+		afterCreatedAt, afterID = &createdAt, last.ID
+	}
 }
 
 func compareActiveSubmissions(
@@ -482,11 +523,15 @@ func (m *Manager) restoreRecoveredSubmissionRecord(
 	peer journal.SubmissionSummary,
 	terminal bool,
 ) error {
-	reader, ok := delivery.(agentDeliverySubmissionReader)
-	if !ok {
+	var submission *models.AgentDeliverySubmission
+	var err error
+	if reader, ok := delivery.(agentDeliverySubmissionMetadataReader); ok {
+		submission, err = reader.GetAgentDeliverySubmissionMetadata(ctx, peer.ID)
+	} else if reader, ok := delivery.(agentDeliverySubmissionReader); ok {
+		submission, err = reader.GetAgentDeliverySubmission(ctx, peer.ID)
+	} else {
 		return fmt.Errorf("%w: %w: SQL submission reader is not configured", ErrDurableAdoptionBlocked, ErrDurableAdoptionEvidenceUnavailable)
 	}
-	submission, err := reader.GetAgentDeliverySubmission(ctx, peer.ID)
 	if err != nil {
 		return fmt.Errorf("%w: %w: load recovered submission %q: %v", ErrDurableAdoptionBlocked, ErrDurableAdoptionEvidenceUnavailable, peer.ID, err)
 	}
@@ -502,7 +547,7 @@ func (m *Manager) restoreRecoveredSubmissionRecord(
 		return fmt.Errorf("%w: retained terminal submission %q is not replayable", ErrDurableAdoptionBlocked, peer.ID)
 	}
 	execution.setDeliverySubmissionID(submission.ID)
-	return nil
+	return restoreRecoveredPromptTurnBinding(execution, submission.ID)
 }
 
 func adoptionReplayCursor(
@@ -513,10 +558,10 @@ func adoptionReplayCursor(
 ) (uint64, error) {
 	cursor, err := delivery.GetAgentDeliveryCursor(ctx, streamID)
 	if errors.Is(err, sql.ErrNoRows) {
-		if stream == nil || stream.FirstRetained <= 1 {
+		if stream == nil || stream.HighWater == 0 {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("projected cursor is absent after retained sequence %d", stream.FirstRetained)
+		return 0, fmt.Errorf("projected cursor is absent for retained stream history: %w", repoerrors.ErrAgentDeliveryCheckpointMissing)
 	}
 	if err != nil {
 		return 0, err

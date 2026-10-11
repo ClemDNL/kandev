@@ -166,6 +166,11 @@ This requirement extends recovery for existing installations. It does not change
 - Keeping agent processes alive after an executor intentionally terminates them.
 - Replacing backend SQL transcripts or the existing browser subscription contract.
 
+## Pending backend retention extension
+
+[Backend delivery retention](backend-agent-delivery-retention.md) defines bounded transport cleanup while preserving this delivery contract.
+Its [work package](../../../plans/backend-agent-delivery-retention/plan.md) has Tasks 01-07 implemented and Task 08 acceptance in progress. It does not change current implementation status.
+
 ## Implementation records
 
 - [Journal shutdown and interrupted-session recovery repair](../../../plans/agentctl-journal-shutdown-recovery/plan.md).

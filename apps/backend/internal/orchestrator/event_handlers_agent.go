@@ -793,7 +793,9 @@ func (s *Service) drainQueuedBeforeWorkflowTransition(
 		return false
 	}
 	s.setSessionWaitingForInput(ctx, taskID, sessionID, session)
-	outcome := s.drainQueuedMessageForPromptableSessionLockedWithTaskAdmission(ctx, taskID, sessionID)
+	outcome := s.drainQueuedMessageForPromptableSessionLockedWithTaskAdmissionAndIdentity(
+		ctx, taskID, sessionID, nil, workflowEffectFromContext(ctx),
+	)
 	return outcome == queueDrainDispatched
 }
 
@@ -1092,7 +1094,7 @@ func (s *Service) handleAgentReady(ctx context.Context, data watcher.AgentEventD
 
 	// Complete the current turn
 	s.reconcileCompletedCIAutoFixTurn(ctx, data.TaskID, data.SessionID, turnAtEventFire)
-	completionCtx := withWorkflowEffect(ctx, workflowEffectForTurn(turnAtEventFire))
+	completionCtx := withWorkflowEffect(ctx, workflowEffectForEvent(data))
 	if turnAtEventFire != "" {
 		if err := s.completeTurnForTaskSessionCheckedOwned(
 			completionCtx, data.TaskID, data.SessionID, turnAtEventFire,
@@ -1136,8 +1138,12 @@ func (s *Service) handleAgentReady(ctx context.Context, data watcher.AgentEventD
 		return
 	}
 
-	if s.drainQueuedBeforeWorkflowTransition(ctx, data.TaskID, data.SessionID, session) {
+	if s.drainQueuedBeforeWorkflowTransition(completionCtx, data.TaskID, data.SessionID, session) {
 		return
+	}
+	if err := s.reconcileAgentDeliverySettlements(context.WithoutCancel(completionCtx), data.SessionID); err != nil {
+		s.logger.Warn("failed to prepare terminal delivery settlement before workflow evaluation",
+			zap.String("task_id", data.TaskID), zap.String("session_id", data.SessionID), zap.Error(err))
 	}
 
 	completionFollowUp := models.IsCompletionFollowUpSession(session.Metadata)
@@ -1145,12 +1151,24 @@ func (s *Service) handleAgentReady(ctx context.Context, data watcher.AgentEventD
 		// A completed task's explicit follow-up turn is conversational only. It
 		// must become promptable again without re-evaluating the final step's
 		// workflow actions or changing the task's completed state.
+		if err := s.recordNotRequiredDeliveryWorkflowOutcome(completionCtx, data.TaskID, workflowEffectFromContext(completionCtx)); err != nil {
+			s.logger.Warn("failed to record non-workflow completion outcome",
+				zap.String("task_id", data.TaskID), zap.String("session_id", data.SessionID), zap.Error(err))
+		}
 		s.setSessionWaitingForInput(ctx, data.TaskID, data.SessionID, session)
 	} else {
 		// Check for workflow transition based on session's current step.
 		// Uses the engine when available; falls back to legacy evaluation.
 		// The ViaEngine method handles setSessionWaitingForInput internally when no transition occurs.
-		transitioned := s.processOnTurnCompleteViaEngine(completionCtx, data.TaskID, session)
+		cause := turnCompletionCauseAgentTurn
+		if data.DeliveryOutcome == string(models.DeliverySubmissionCancelled) {
+			cause = turnCompletionCauseUserCancellation
+		}
+		transitioned := s.processOnTurnCompleteViaEngineWithCause(completionCtx, data.TaskID, session, cause)
+		if err := s.reconcileAgentDeliverySettlements(context.WithoutCancel(completionCtx), data.SessionID); err != nil {
+			s.logger.Warn("failed to reconcile terminal delivery after workflow evaluation",
+				zap.String("task_id", data.TaskID), zap.String("session_id", data.SessionID), zap.Error(err))
+		}
 
 		// When a workflow transition occurred (e.g. Work → Review), the new step's
 		// on_enter actions handle the next prompt (auto_start_agent launches a goroutine).
@@ -2695,9 +2713,7 @@ func (s *Service) finishAgentCompleted(
 	if !completionFollowUp {
 		s.reconcileCIAutoFixTurnBeforeCompletion(ctx, data.TaskID, data.SessionID, "")
 	}
-	completionCtx := withWorkflowEffect(
-		context.WithoutCancel(ctx), workflowEffectForTurn(data.TurnID),
-	)
+	completionCtx := withWorkflowEffect(context.WithoutCancel(ctx), workflowEffectForEvent(data))
 	if data.TurnID != "" {
 		if err := s.completeTurnForTaskSessionCheckedOwned(
 			completionCtx, data.TaskID, data.SessionID, data.TurnID,
@@ -2726,9 +2742,27 @@ func (s *Service) finishAgentCompleted(
 		return
 	}
 
-	transitioned := !completionFollowUp &&
-		!s.drainQueuedBeforeWorkflowTransition(ctx, data.TaskID, data.SessionID, session) &&
-		s.processOnTurnCompleteViaEngine(completionCtx, data.TaskID, session)
+	if err := s.reconcileAgentDeliverySettlements(completionCtx, data.SessionID); err != nil {
+		s.logger.Warn("failed to prepare terminal delivery settlement before completed workflow evaluation",
+			zap.String("task_id", data.TaskID), zap.String("session_id", data.SessionID), zap.Error(err))
+	}
+	var transitioned bool
+	if completionFollowUp {
+		if err := s.recordNotRequiredDeliveryWorkflowOutcome(completionCtx, data.TaskID, workflowEffectFromContext(completionCtx)); err != nil {
+			s.logger.Warn("failed to record non-workflow completion outcome",
+				zap.String("task_id", data.TaskID), zap.String("session_id", data.SessionID), zap.Error(err))
+		}
+	} else if !s.drainQueuedBeforeWorkflowTransition(completionCtx, data.TaskID, data.SessionID, session) {
+		cause := turnCompletionCauseAgentTurn
+		if data.DeliveryOutcome == string(models.DeliverySubmissionCancelled) {
+			cause = turnCompletionCauseUserCancellation
+		}
+		transitioned = s.processOnTurnCompleteViaEngineWithCause(completionCtx, data.TaskID, session, cause)
+	}
+	if err := s.reconcileAgentDeliverySettlements(completionCtx, data.SessionID); err != nil {
+		s.logger.Warn("failed to reconcile terminal delivery after completed workflow evaluation",
+			zap.String("task_id", data.TaskID), zap.String("session_id", data.SessionID), zap.Error(err))
+	}
 	s.finishAgentCompletedTurn(ctx, data, session, transitioned, completionFollowUp, guard)
 }
 
@@ -2848,6 +2882,7 @@ func (s *Service) handleAgentFailed(ctx context.Context, data watcher.AgentEvent
 	dispatch := s.handleAgentFailedLocked(ctx, data)
 	lock.Unlock()
 	release()
+	s.settleFailedDeliveryWorkflowOutcome(context.WithoutCancel(ctx), data)
 	if dispatch != nil {
 		s.startAgentFailureRecovery(dispatch)
 	}

@@ -195,7 +195,7 @@ func (m *Manager) handleCompleteEventMarkState(
 		// shows no red error banner. MarkCompleted applies the same guard, but
 		// routing here keeps the misleading "marking as failed" WARN out of logs.
 		if m.IsShuttingDown() {
-			_ = m.markStoppedDuringShutdown(execution, 1, errorMsg, event.TurnID)
+			_ = m.markStoppedDuringShutdownForEvent(execution, 1, errorMsg, event)
 			return
 		}
 		m.logger.Warn("error completion received, marking execution as failed",
@@ -207,7 +207,9 @@ func (m *Manager) handleCompleteEventMarkState(
 			zap.Any("event_data", event.Data),
 			zap.String("agent_command", execution.AgentCommand),
 			zap.String("acp_session_id", execution.ACPSessionID))
-		if err := m.markCompletedWithTurnIDAndAttempt(execution.ID, 1, errorMsg, event.TurnID, failureEvidence, event.AttemptID); err != nil {
+		if err := m.markCompletedWithTurnIDAndAttempt(
+			execution.ID, 1, errorMsg, event.TurnID, failureEvidence, event.AttemptID, event,
+		); err != nil {
 			m.logger.Error("failed to mark execution as failed after error completion",
 				zap.String("execution_id", execution.ID),
 				zap.Error(err))
@@ -332,6 +334,7 @@ func (m *Manager) claimPromptCompletion(
 		current.Status = v1.AgentStatusReady
 		claim.readyPayload = newAgentEventPayloadWithTurnID(current, event.TurnID)
 		claim.readyPayload.AttemptID = event.AttemptID
+		copyDeliveryTerminalIdentity(&claim.readyPayload, event)
 	})
 	if err == nil && claimed {
 		return claim, true
@@ -484,6 +487,7 @@ func (m *Manager) retainPromptFailureRuntime(
 		current.ErrorMessage = ""
 		current.promptSettlementGeneration = event.PromptGeneration
 		payload = newAgentEventPayloadWithTurnIDAndEvidence(current, event.TurnID, failureEvidence)
+		copyDeliveryTerminalIdentity(&payload, event)
 		payload.ErrorMessage = extractErrorMessage(event)
 		payload.PromptFailureDisposition = event.PromptFailureDisposition
 		if event.AttemptID != "" {
@@ -1633,6 +1637,9 @@ func (m *Manager) handleAgentEventWithStartupGeneration(
 	startupGeneration uint64,
 ) {
 	accepted := execution.withStartupAttempt(startupGeneration, func(attemptID string) {
+		if agentEventBelongsToRetiredProcess(execution, event) {
+			return
+		}
 		event.AttemptID = attemptID
 		event.SessionSettingsSourceGeneration = startupGeneration
 		if !execution.isSessionInitialized() && event.PromptGeneration == 0 && event.Type == toolStatusComplete {

@@ -722,6 +722,28 @@ type AgentDeliveryRepository interface {
 	GetAgentDeliveryEffect(ctx context.Context, effectKey string) (*models.AgentDeliveryEffect, error)
 }
 
+// AgentDeliveryRetentionRepository executes one bounded, atomic retention
+// batch against the task-owned delivery journal.
+type AgentDeliveryRetentionRepository interface {
+	RunAgentDeliveryRetentionBatch(
+		ctx context.Context,
+		options models.AgentDeliveryRetentionBatchOptions,
+	) (models.AgentDeliveryRetentionBatchResult, error)
+}
+
+// AgentDeliveryRetirementRepository purges explicitly retired identities and
+// discovers attributable orphans in bounded transactions.
+type AgentDeliveryRetirementRepository interface {
+	RunAgentDeliveryRetirementBatch(
+		ctx context.Context,
+		options models.AgentDeliveryRetirementBatchOptions,
+	) (models.AgentDeliveryRetirementBatchResult, error)
+	RunAgentDeliveryOrphanBatch(
+		ctx context.Context,
+		options models.AgentDeliveryOrphanBatchOptions,
+	) (models.AgentDeliveryOrphanBatchResult, error)
+}
+
 // AgentDeliverySettlementRepository exposes the durable outbox used to finish
 // exact terminal submissions after ordered projection. Implementations retain
 // non-completed effects until queue-claim cleanup succeeds.
@@ -729,6 +751,14 @@ type AgentDeliverySettlementRepository interface {
 	SettleAgentDeliveryTerminal(ctx context.Context, streamID string, sequence int64, outcome models.DeliverySubmissionState, settledAt time.Time) (bool, error)
 	ListPendingAgentDeliverySettlements(ctx context.Context, sessionID string) ([]*models.AgentDeliveryEffect, error)
 	CompleteAgentDeliveryTerminalSettlement(ctx context.Context, effectKey string, completedAt time.Time) (bool, error)
+}
+
+// AgentDeliveryWorkflowOutcomeRepository records a guarded workflow no-op for
+// a projected terminal. Applied transitions record their receipt in the
+// transition transaction instead.
+type AgentDeliveryWorkflowOutcomeRepository interface {
+	RecordAgentDeliveryWorkflowOutcome(ctx context.Context, taskID string, effect *models.AgentDeliveryEffect) (bool, error)
+	BackfillLegacyAgentDeliveryWorkflowEffect(ctx context.Context, effect *models.AgentDeliveryEffect) (bool, error)
 }
 
 // SessionWorktreeRepository exposes session-scoped worktree projections over

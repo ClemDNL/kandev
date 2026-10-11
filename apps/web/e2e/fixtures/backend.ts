@@ -62,9 +62,10 @@ export type BackendContext = {
    * on every call, so `envOverrides` only apply to this restart — they do
    * NOT leak into a subsequent restart. Call `restart()` with no args to
    * revert to the baseline env. Only in-memory execution state (running
-   * agents, WS connections) is lost.
+   * agents, WS connections) is lost. An optional binary path runs a frozen
+   * compatible backend against the same disposable database for rollback tests.
    */
-  restart: (envOverrides?: Record<string, string>) => Promise<void>;
+  restart: (envOverrides?: Record<string, string>, binaryPath?: string) => Promise<void>;
   /**
    * Verify the worker backend is serving requests and recover it when a
    * previous test left the process unavailable.
@@ -492,7 +493,7 @@ export const backendFixture = base.extend<object, { backend: BackendContext }>({
          * SQLite DB, tmpDir, and all persisted data survive the restart.
          * Only in-memory execution state (running agents, WS connections) is lost.
          */
-        const restart = async (envOverrides?: Record<string, string>) => {
+        const restart = async (envOverrides?: Record<string, string>, binaryPath?: string) => {
           // Rebuild from the baseline snapshot so a previous restart's
           // overrides don't leak into this one (e.g. KANDEV_MOCK_PROVIDERS
           // set by the routing specs would otherwise stick for the rest of
@@ -509,7 +510,7 @@ export const backendFixture = base.extend<object, { backend: BackendContext }>({
           // as soon as the port stops accepting connections (typically <200 ms).
           await waitForPortFree(backendPort);
           backendProc = spawnBackendProcess(
-            compactRuntime?.launcherPath ?? KANDEV_BIN,
+            binaryPath ?? compactRuntime?.launcherPath ?? KANDEV_BIN,
             nextEnv,
             debug,
             backendPort,

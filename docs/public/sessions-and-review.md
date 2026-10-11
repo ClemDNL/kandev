@@ -186,6 +186,12 @@ Committed output remains available for replay. A failed cancellation does not
 prove that the agent stopped. The journal never discards unacknowledged output
 to make room.
 
+Backend delivery cleanup preserves saved conversation output on desktop and phones.
+It removes redundant transport payloads after safe projection and settlement.
+If an ACK was lost after cleanup, **Retry connection** uses the persisted cursor without resending the prompt.
+Uncertain work remains protected. **Stop** and the existing recovery actions remain available.
+See [delivery retention operations](operations.md#backend-delivery-retention) for expiry, deletion, and rollback limits.
+
 Kandev can replace the local agent runtime while the backend and browser
 connection stay active. This restores runtime service only. A session with an
 uncertain prompt outcome remains blocked until a safe recovery action or the

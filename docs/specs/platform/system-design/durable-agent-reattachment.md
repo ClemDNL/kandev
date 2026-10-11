@@ -320,3 +320,9 @@ Reuse existing agent_delivery_* metrics with bounded reasons; keep IDs out of me
 The [work package](../../../plans/durable-agent-reattachment/plan.md) owns implementation and validation.
 The [shutdown and recovery repair](../../../plans/agentctl-journal-shutdown-recovery/plan.md) owns the later closed-journal and missing-execution regressions.
 Detached MCP waiting/offline budgets and richer remote-working UI remain follow-up work.
+
+## Pending backend retention extension
+
+[Backend retention](backend-agent-delivery-retention.md) adds compact-evidence replay and authenticated projected-cursor ACK retry.
+It preserves this design's exact-submission terminal settlement and independent recovery causes.
+The [retention package](../../../plans/backend-agent-delivery-retention/plan.md) has Task 08 acceptance in progress; prior reattachment results do not verify pruning.

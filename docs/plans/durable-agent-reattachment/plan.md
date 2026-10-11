@@ -152,6 +152,13 @@ Tasks 01-05 are implemented sequentially with TDD, and each work order records i
 
 Task 01's full process race suite still has the independently reported `TestWorkspaceTracker_StopsWhenGitBroken` goroutine-shutdown timeout; its durable producer, terminal-tail, and detach/reattach regressions pass. PostgreSQL and native Windows/macOS validation remain release gates and are not represented as passing.
 
+## Pending backend retention extension (2026-10-05)
+
+The [backend delivery retention package](../backend-agent-delivery-retention/plan.md) starts from verified `f2668750bf6a17792b58d423f6b5b99cfeabf78e`.
+Tasks 01-07 are implemented; Task 08 acceptance remains in progress.
+This extension preserves all completed orders, existing results and environment-dependent gaps recorded here.
+It owns new payload/receipt cleanup, checkpoint replay and retention validation; historical recovery evidence is not retention acceptance.
+
 ## Journal shutdown and recovery follow-up (2026-10-09)
 
 The [repair package](../agentctl-journal-shutdown-recovery/plan.md) owns the observed journal-close panic and retry failure after execution removal.

@@ -83,6 +83,9 @@ type AgentExecution struct {
 	DeliveryStreamID          string   // Generation-scoped durable agentctl stream
 	DeliveryIncarnationID     string   // Kandev session incarnation owning the stream
 	DeliveryHarnessGeneration uint64   // Native harness generation owning the stream
+	// Fresh native startup buffers delivery until its initial SQL generation exists.
+	deliveryBootstrap   atomic.Bool
+	deliveryNegotiation atomic.Pointer[deliveryNegotiationGate]
 	// DeliveryMode records the recovery protocol selected for this execution.
 	// It is set before an adopted execution is published so admission and stream
 	// replay cannot observe an undiscovered peer as legacy.

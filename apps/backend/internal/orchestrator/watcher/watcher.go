@@ -47,12 +47,17 @@ type AgentEventData struct {
 	AgentProfileID            string                                `json:"agent_profile_id"`
 	ExecutionProfileID        string                                `json:"execution_profile_id,omitempty"`
 	TurnID                    string                                `json:"turn_id,omitempty"`
+	DeliveryStreamID          string                                `json:"delivery_stream_id,omitempty"`
+	DeliveryIncarnationID     string                                `json:"delivery_incarnation_id,omitempty"`
+	DeliveryHarnessGeneration uint64                                `json:"delivery_harness_generation,omitempty"`
+	DeliverySequence          uint64                                `json:"delivery_sequence,omitempty"`
+	DeliverySubmissionID      string                                `json:"delivery_submission_id,omitempty"`
+	DeliveryOutcome           string                                `json:"delivery_outcome,omitempty"`
 	Status                    string                                `json:"status,omitempty"`
 	ExitCode                  *int                                  `json:"exit_code,omitempty"`
 	ErrorMessage              string                                `json:"error_message,omitempty"`
 	FailureCode               string                                `json:"failure_code,omitempty"`
 	FailureDetails            string                                `json:"failure_details,omitempty"`
-	DeliverySubmissionID      string                                `json:"delivery_submission_id,omitempty"`
 	StartupFailureReason      string                                `json:"startup_reason,omitempty"`
 	StartupFailureAttempts    int                                   `json:"startup_attempts,omitempty"`
 	StartupFailureNPMCode     string                                `json:"startup_npm_code,omitempty"`

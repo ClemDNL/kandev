@@ -14,6 +14,7 @@ import (
 	"github.com/kandev/kandev/internal/common/logger"
 	"github.com/kandev/kandev/internal/events"
 	"github.com/kandev/kandev/internal/events/bus"
+	"github.com/kandev/kandev/internal/task/models"
 )
 
 // EventPublisher handles publishing agent lifecycle and session events to the event bus.
@@ -60,6 +61,42 @@ func (p *EventPublisher) publishAgentEventWithTurnIDAndEvidence(
 		payload.AttemptID = attemptID
 	}
 	p.publishAgentEventPayload(ctx, eventType, payload)
+}
+
+func (p *EventPublisher) publishAgentEventWithTerminalEvent(
+	ctx context.Context,
+	eventType string,
+	execution *AgentExecution,
+	terminal *streams.AgentEvent,
+	evidence *PromptAttemptEvidence,
+) {
+	if terminal == nil {
+		p.publishAgentEventWithTurnIDAndEvidence(ctx, eventType, execution, execution.promptTurnIDSnapshot(), evidence)
+		return
+	}
+	payload := newAgentEventPayloadWithTurnIDAndEvidence(execution, terminal.TurnID, evidence)
+	copyDeliveryTerminalIdentity(&payload, terminal)
+	if attemptID := ResumeAttemptIDFromContext(ctx); attemptID != "" {
+		payload.AttemptID = attemptID
+	}
+	_ = p.publishAgentEventPayload(ctx, eventType, payload)
+}
+
+func copyDeliveryTerminalIdentity(payload *AgentEventPayload, terminal *streams.AgentEvent) {
+	if payload == nil || terminal == nil {
+		return
+	}
+	payload.DeliveryStreamID = terminal.DeliveryStreamID
+	payload.DeliveryIncarnationID = terminal.DeliveryIncarnationID
+	payload.DeliveryHarnessGeneration = terminal.DeliveryHarnessGeneration
+	payload.DeliverySequence = terminal.DeliverySequence
+	payload.DeliverySubmissionID = terminal.DeliverySubmissionID
+	payload.DeliveryOutcome = string(models.DeliverySubmissionCompleted)
+	if isError, _ := terminal.Data["is_error"].(bool); isError {
+		payload.DeliveryOutcome = string(models.DeliverySubmissionFailed)
+	} else if terminal.Data["stop_reason"] == string(models.DeliverySubmissionCancelled) {
+		payload.DeliveryOutcome = string(models.DeliverySubmissionCancelled)
+	}
 }
 
 // PublishAgentStalled publishes one inactivity signal for a prompt.
