@@ -722,18 +722,19 @@ func (s *Service) startCreatedSessionWithComposedPromptAndLifecycleOwnership(
 }
 
 type startCreatedSessionOptions struct {
-	lifecycleLockHeld           bool
-	refuseIfAgentRunning        bool
-	initialCreatePrompt         bool
-	beforeInitialPromptDispatch func() error
-	beforeProviderAdmission     func(executionID string) error
-	onExecutionAdmitted         func(executionID string)
-	onInitialPromptAccepted     func(executionID string)
-	onInitialPromptFailed       func()
-	skipTaskDescriptionFallback bool
-	promptAlreadyComposed       bool
-	noInitialTurn               bool
-	retryPrompt                 string
+	lifecycleLockHeld              bool
+	refuseIfAgentRunning           bool
+	initialCreatePrompt            bool
+	beforeInitialPromptDispatch    func() error
+	beforeProviderAdmission        func(executionID string) error
+	onExecutionAdmitted            func(executionID string)
+	onInitialPromptAccepted        func(executionID string)
+	onInitialPromptFailed          func()
+	onInitialPromptAdmissionFailed func(error)
+	skipTaskDescriptionFallback    bool
+	promptAlreadyComposed          bool
+	noInitialTurn                  bool
+	retryPrompt                    string
 	// canvasGuidanceResolved carries the server-side capability projection
 	// from message admission. When false, this launch resolves the capability
 	// locally because no earlier producer has made a trusted decision.
@@ -1078,14 +1079,7 @@ func (s *Service) startCreatedSession(
 		return nil, err
 	}
 	if effectivePrompt != "" || len(attachments) > 0 || options.deliverySubmissionID != "" {
-		launchOptions.DeliverySubmissionID = options.deliverySubmissionID
-		launchOptions.BeforeAgentStart = func(admissionCtx context.Context, executionID, dispatchPrompt string) error {
-			return s.prepareInitialAgentDeliverySubmission(admissionCtx, session, executionID,
-				dispatchPrompt, attachments, promptTaskOptions{
-					deliveryProtocol: options.deliveryProtocol, deliverySubmissionID: options.deliverySubmissionID,
-					deliveryPayloadHash: options.deliveryPayloadHash, deliveryClaimUpdater: options.deliveryClaimUpdater,
-				})
-		}
+		s.configureInitialDeliveryAdmission(session, options, &launchOptions)
 	}
 	if options.initialCreatePrompt && session.IsPassthrough {
 		launchOptions.OnExecutionAdmitted = func(executionID string) {
@@ -1150,7 +1144,11 @@ func (s *Service) configureInitialPromptDispatch(
 	}
 	launchOptions.OnInitialPromptAccepted = options.onInitialPromptAccepted
 	launchOptions.OnInitialPromptFailed = options.onInitialPromptFailed
-	launchOptions.BeforeInitialPromptDispatch = options.beforeProviderAdmission
+	if options.beforeProviderAdmission != nil {
+		launchOptions.BeforeInitialPromptDispatch = func(_ context.Context, executionID, _ string, _ []v1.MessageAttachment) error {
+			return options.beforeProviderAdmission(executionID)
+		}
+	}
 	return nil
 }
 
@@ -7079,7 +7077,7 @@ func (s *Service) runPromptTurn(
 	}
 	defer releaseCeilingDispatch()
 	promptCtx = dispatchCtx
-	beforeAdmission := s.preparePromptAdmissionCallback(
+	validateAdmission := s.preparePromptAdmissionCallback(
 		promptCtx, taskID, sessionID, session, rollback, options, resumeAttempt,
 	)
 	onDispatched, dispatchOutcome := s.preparePromptDispatchCallback(
@@ -7087,9 +7085,7 @@ func (s *Service) runPromptTurn(
 		resumeAttempt,
 	)
 	activityExecutionID, _ := s.agentManager.GetExecutionIDForSession(promptCtx, sessionID)
-	delivery, deliveryErr := s.prepareAgentDeliverySubmission(
-		promptCtx, session, activityExecutionID, effectivePrompt, attachments, options,
-	)
+	protocol, deliveryErr := s.resolveDeliveryProtocol(promptCtx, sessionID, activityExecutionID, options.deliveryProtocol)
 	if deliveryErr != nil {
 		if releaseDispatchGuard != nil {
 			releaseDispatchGuard()
@@ -7098,22 +7094,18 @@ func (s *Service) runPromptTurn(
 		s.rollbackPromptClaimAfterAdmissionFailure(ctx, taskID, sessionID, rollback)
 		return nil, deliveryErr
 	}
-	if delivery != nil {
-		delivery.dispatchOnly = dispatchOnly
+	options.deliveryProtocol = protocol
+	var submissionID string
+	if protocol == messagequeue.DeliveryProtocolV1 {
+		if options.deliverySubmissionID == "" {
+			options.deliverySubmissionID = "internal:" + uuid.NewString()
+		}
+		submissionID = normalizeDeliverySubmissionID(options.deliverySubmissionID)
 	}
-	var result *executor.PromptResult
-	var execErr error
-	if delivery != nil {
-		result, execErr = s.executor.PromptWithAdmissionCallbackAndSubmissionID(
-			promptCtx, taskID, sessionID, effectivePrompt, attachments, dispatchOnly,
-			beforeAdmission, onDispatched, delivery.id, session,
-		)
-	} else {
-		result, execErr = s.executor.PromptWithAdmissionCallback(
-			promptCtx, taskID, sessionID, effectivePrompt, attachments, dispatchOnly,
-			beforeAdmission, onDispatched, session,
-		)
-	}
+	result, delivery, execErr := s.dispatchPreparedPrompt(
+		promptCtx, taskID, session, activityExecutionID, effectivePrompt, attachments,
+		dispatchOnly, options, submissionID, validateAdmission, onDispatched,
+	)
 	return s.finishPromptExecutorDispatch(
 		ctx, taskID, sessionID, prompt, planMode, resumedForPrompt, attachments,
 		rollback, options, foregroundDispatch, releaseDispatchGuard, result, execErr, dispatchOutcome, resumeAttempt, delivery,
