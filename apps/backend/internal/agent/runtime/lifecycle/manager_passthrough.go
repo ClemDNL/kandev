@@ -44,7 +44,7 @@ func (m *Manager) PreparePassthroughRunning(sessionID string) (func(), error) {
 	var updated *AgentExecution
 	var alreadyRunning bool
 	var validationErr error
-	if err := m.executionStore.WithLock(execution.ID, func(current *AgentExecution) {
+	if err := m.executionStore.WithPromptLifecycleLock(execution.ID, func(current *AgentExecution) {
 		// Revalidate the session mapping and passthrough mode while claiming the
 		// transition. The initial lookup only supplies the execution ID to lock.
 		if current.SessionID != sessionID {
@@ -67,10 +67,10 @@ func (m *Manager) PreparePassthroughRunning(sessionID string) (func(), error) {
 		// previous native dispatch. Clear that identity before publishing the
 		// running snapshot so a delayed ready event cannot settle an unrelated
 		// Kandev turn after a PTY prompt starts.
-		current.setPromptTurnID("")
+		current.promptTurnID = ""
 		// Capture the payload under the same lock as the status claim so a
 		// competing stop/failure cannot relabel the deferred event.
-		payload = newAgentEventPayload(current)
+		payload = newAgentEventPayloadPromptLocked(current)
 	}); err != nil {
 		if errors.Is(err, ErrExecutionNotFound) {
 			return nil, fmt.Errorf("no agent execution found for session: %s", sessionID)

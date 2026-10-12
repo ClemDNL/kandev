@@ -2554,13 +2554,16 @@ func (m *Manager) markReadyEventForExecution(
 	var payload AgentEventPayload
 	var updated *AgentExecution
 	var alreadyReady bool
-	if err := m.executionStore.WithLock(executionID, func(execution *AgentExecution) {
+	// The payload snapshots promptTurnID, so take promptLifecycleMu before the
+	// store lock. Reading it under the store lock deadlocks against a
+	// concurrent completion claim and blocks every session's store access.
+	if err := m.executionStore.WithPromptLifecycleLock(executionID, func(execution *AgentExecution) {
 		if execution.Status == v1.AgentStatusReady {
 			alreadyReady = true
 			return
 		}
 		execution.Status = v1.AgentStatusReady
-		payload = newAgentEventPayload(execution)
+		payload = newAgentEventPayloadPromptLocked(execution)
 		payload.AttemptID = attemptID
 		updated = execution
 	}); err != nil {
