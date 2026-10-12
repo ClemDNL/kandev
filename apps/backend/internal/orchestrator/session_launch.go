@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	agentruntime "github.com/kandev/kandev/internal/agent/runtime"
+	"github.com/kandev/kandev/internal/automation"
 	"github.com/kandev/kandev/internal/orchestrator/executor"
 	taskdto "github.com/kandev/kandev/internal/task/dto"
 	"github.com/kandev/kandev/internal/task/models"
@@ -819,6 +820,11 @@ func (s *Service) claimLaunchAttachments(ctx context.Context, req *LaunchSession
 // the prompt — eagerly launching here would spawn a promptless PTY and the
 // later start would be rejected against the now-running session.
 func (s *Service) launchPrepare(ctx context.Context, req *LaunchSessionRequest) (*LaunchSessionResponse, error) {
+	manualTaskID := ""
+	if launchOriginForActivation(req) == launchOriginManual && retryLaunchInContext(ctx) == nil {
+		manualTaskID = req.TaskID
+	}
+	ctx = models.WithExplicitManualCreation(ctx, manualTaskID)
 	prepareCtx := withInitialPromptPreview(ctx, req.InitialPromptPreview)
 	prepareCtx = withInitialPromptSubmission(prepareCtx, req.InitialPromptSubmission)
 	if s.shouldUpgradePassthroughPrepare(ctx, req) {
@@ -1363,6 +1369,9 @@ func (s *Service) RecoverSessionWithOptions(
 	session, err := s.loadSessionForRecovery(ctx, taskID, sessionID, options.SettingsPolicy)
 	if err != nil {
 		return nil, err
+	}
+	if s.automationOwnsRetrySession(ctx, taskID, sessionID) {
+		return nil, automation.ErrRetryLaunchUncertain
 	}
 	action, err = normalizeSessionRecoveryAction(ctx, sessionID, action, s.wasResumeAttempt)
 	if err != nil {

@@ -148,6 +148,11 @@ func (s *Service) ensureSilentRestoreCandidate(
 	checkpoint models.SilentRestoreCheckpoint,
 	inputs *silentRestoreInputs,
 ) error {
+	ownerCtx, err := s.revalidateSilentRestoreInputs(ctx, inputs, checkpoint)
+	if err != nil {
+		return err
+	}
+	ctx = ownerCtx
 	if checkpoint.CandidateExecutionID == "" {
 		expected := checkpoint
 		next := expected

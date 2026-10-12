@@ -16,6 +16,9 @@ func (s *Service) repairRestartRecoveryPresentation(ctx context.Context, session
 	if err != nil {
 		return nil, err
 	}
+	if s.automationOwnsRetrySession(ctx, session.TaskID, session.ID) {
+		return session, nil
+	}
 	generation, err := s.restartRecoveryNativeGeneration(ctx, session)
 	if err != nil {
 		return nil, err

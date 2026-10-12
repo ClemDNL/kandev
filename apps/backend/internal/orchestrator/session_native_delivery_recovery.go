@@ -117,6 +117,9 @@ func (s *Service) finishLoadedNativeDeliveryBlock(ctx context.Context, block *mo
 	if err != nil || session == nil {
 		return false, err
 	}
+	if s.automationOwnsRetrySession(ctx, session.TaskID, session.ID) {
+		return false, nil
+	}
 	office, err := s.lookupOfficeTask(ctx, session.TaskID)
 	if err != nil || office {
 		return false, err
