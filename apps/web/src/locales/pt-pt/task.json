@@ -2715,6 +2715,8 @@
   "sortAscending": "Ascendente",
   "sortMatchingFirst": "Correspondentes primeiro",
   "sortRuleColor": "Cor do campo de ordenação {{position}}",
+  "sessionRuntimeCleanupFailedTitle": "Não foi possível concluir a retoma",
+  "sessionRuntimeCleanupFailedBody": "Não foi possível parar o ambiente de execução anterior. Verifique a ligação ao executor e tente retomar novamente.",
   "deliveryRecoveryAttached": "Ligação restabelecida. O pedido anterior não foi reenviado.",
   "deliveryRecoverySettled": "A saída guardada foi sincronizada e o resultado do pedido foi recuperado.",
   "deliveryRecoveryUncertain": "O resultado do pedido anterior continua desconhecido. Reveja as alterações preservadas antes de continuar.",

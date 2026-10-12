@@ -2715,6 +2715,8 @@
   "sortAscending": "昇順",
   "sortMatchingFirst": "一致する項目を優先",
   "sortRuleColor": "並べ替え項目 {{position}} の色",
+  "sessionRuntimeCleanupFailedTitle": "再開を完了できませんでした",
+  "sessionRuntimeCleanupFailedBody": "以前のランタイムを停止できませんでした。実行環境への接続を確認してから、再開を再試行してください。",
   "deliveryRecoveryAttached": "接続が復旧しました。前のプロンプトは再送信されていません。",
   "deliveryRecoverySettled": "保存された出力を同期し、プロンプトの結果を復元しました。",
   "deliveryRecoveryUncertain": "前のプロンプトの結果はまだ不明です。続行する前に保持された変更を確認してください。",

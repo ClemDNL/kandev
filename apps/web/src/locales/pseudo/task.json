@@ -2715,6 +2715,8 @@
   "sortAscending": "Àśćēńďĩńĝ",
   "sortMatchingFirst": "Ḿàţćĥĩńĝ ƒĩŕśţ",
   "sortRuleColor": "Ćōĺōŕ ƒōŕ śōŕţ ƒĩēĺď {{position}}",
+  "sessionRuntimeCleanupFailedTitle": "Ŕēśũḿē ćōũĺď ńōţ ƒĩńĩśĥ",
+  "sessionRuntimeCleanupFailedBody": "Ţĥē ƥŕēvĩōũś ŕũńţĩḿē ćōũĺď ńōţ ƀē śţōƥƥēď. Ćĥēćķ ēxēćũţōŕ ćōńńēćţĩvĩţŷ, ţĥēń ŕēţŕŷ Ŕēśũḿē.",
   "deliveryRecoveryAttached": "Ćōńńēćţĩōń ŕēśţōŕēď. Ţĥē ƥŕēvĩōũś ƥŕōḿƥţ ŵàś ńōţ ŕēśēńţ.",
   "deliveryRecoverySettled": "Śàvēď ōũţƥũţ ŵàś śŷńćĥŕōńĩźēď àńď ţĥē ƥŕōḿƥţ ōũţćōḿē ŵàś ŕēćōvēŕēď.",
   "deliveryRecoveryUncertain": "Ţĥē ƥŕēvĩōũś ƥŕōḿƥţ ōũţćōḿē ĩś śţĩĺĺ ũńķńōŵń. Ŕēvĩēŵ ţĥē ŕēţàĩńēď ćĥàńĝēś ƀēƒōŕē ćōńţĩńũĩńĝ.",

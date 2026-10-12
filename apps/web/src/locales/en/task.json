@@ -2715,6 +2715,8 @@
   "sortAscending": "Ascending",
   "sortMatchingFirst": "Matching first",
   "sortRuleColor": "Color for sort field {{position}}",
+  "sessionRuntimeCleanupFailedTitle": "Resume could not finish",
+  "sessionRuntimeCleanupFailedBody": "The previous runtime could not be stopped. Check executor connectivity, then retry Resume.",
   "deliveryRecoveryAttached": "Connection restored. The previous prompt was not resent.",
   "deliveryRecoverySettled": "Saved output was synchronized and the prompt outcome was recovered.",
   "deliveryRecoveryUncertain": "The previous prompt outcome is still unknown. Review the retained changes before continuing.",
