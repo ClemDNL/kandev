@@ -350,6 +350,9 @@ func newPreparedPromptFixture(t *testing.T, suffix string, alternateSession bool
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.SetSessionPrimary(ctx, sessionID); err != nil {
+		t.Fatal(err)
+	}
 	current.IsPrimary = true
 	current.AgentExecutionID = executionID
 	if err := repo.UpdateTaskSession(ctx, current); err != nil {
