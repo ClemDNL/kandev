@@ -599,6 +599,15 @@ Backups can still contain payload bytes removed from the live database.
 
 SQLite is the default and is appropriate for a desktop, CLI, service, or single-replica container installation. Kandev uses one writer connection and a read pool in WAL mode. Only one Kandev backend should own the file.
 
+After a WAL reset, Kandev limits the retained WAL file to 64 MiB. Writes can
+temporarily grow the WAL beyond that size between resets. This does not change
+write durability, checkpoint timing, or the separate database compaction action.
+
+At SQLite startup and before creating a system backup, Kandev reclaims private
+`.kandev-backup-*` staging directories when neither the directory nor any direct
+entry has changed for six hours. Recent crash debris remains until a later boot
+or backup creation. Published backups and other staging prefixes are preserved.
+
 #### Default database continuity and recovery
 
 When no explicit `database.path` or `KANDEV_DATABASE_PATH` is set, startup
@@ -646,8 +655,8 @@ the SQLite file size.
 
 Compaction is an explicit maintenance operation, separate from backup, migration,
 and readiness. Startup does not compact the live database. The pre-migration
-snapshot uses `VACUUM INTO` to create a separate backup; it does not shrink the
-live file.
+snapshot copies SQLite pages into a separate backup, preserving free pages;
+it does not shrink the live file.
 
 1. Wait for the upgraded backend to become ready. Check history before proceeding.
 2. Copy the verified pre-upgrade backup outside the automatic retention directory
