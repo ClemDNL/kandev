@@ -1139,8 +1139,18 @@ func (m *Manager) openCodePassthroughCommand(
 		return agents.Command{}, fmt.Errorf("resolve OpenCode interactive runtime: %w", err)
 	}
 	if selected.Source == managedruntime.OpenCodeSourceNative && runtime == agentruntime.RuntimeStandalone && selected.Spec.NativeBinaryOnPath() {
-		if _, found, err := agents.DetectOpenCodeNativeRuntime(ctx); err != nil {
-			return agents.Command{}, err
+		_, found, err := agents.DetectOpenCodeNativeRuntime(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return agents.Command{}, errors.Join(ctxErr, err)
+		}
+		if err != nil {
+			if fallbackErr := validateNativeOpenCodeProbeFallback(err, selected.Version); fallbackErr != nil {
+				return agents.Command{}, fallbackErr
+			}
+			// The native binary is already selected and on PATH; a transient
+			// version-probe failure must not block the interactive launch.
+			m.logger.Warn("native OpenCode version probe failed; using the selected native binary",
+				zap.Error(err))
 		} else if !found {
 			return agents.Command{}, errors.New("selected native OpenCode runtime is unavailable")
 		}

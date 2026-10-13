@@ -302,6 +302,11 @@ When an existing native OpenCode v1 installation remains selected, same-family
 updates can still update that native executable. A v2 migration always uses
 the managed `@opencode/cli` package and does not run a global npm install.
 
+If a native OpenCode version check still fails after retries, Kandev can use a
+recent supported detection or the selected supported version. Cancelling the
+launch stops it. An observed unsupported major blocks launch until a later
+check reports a supported version; a transient probe failure cannot clear it.
+
 Kandev enables the action only after the backend validates the selected version
 against the trusted package catalogue. It does not accept package names, npm
 tags, prereleases, registry URLs, or command text. When the active version,
