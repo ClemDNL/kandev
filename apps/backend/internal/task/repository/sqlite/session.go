@@ -686,7 +686,7 @@ func (r *Repository) createTaskSessionWithWorkspaceBinding(
 			}
 			return fmt.Errorf("%w: the initial workspace materialization did not complete", models.ErrWorkspaceReuseUnsafe)
 		}
-		return fmt.Errorf("%w: retry after the initial workspace launch completes", models.ErrWorkspacePreparing)
+		return &models.WorkspacePreparingError{EnvironmentID: envID, Reason: "retry after the initial workspace launch completes"}
 	case models.TaskEnvironmentStatus(status) == models.TaskEnvironmentStatusReady || models.TaskEnvironmentStatus(status) == models.TaskEnvironmentStatusStopped:
 		session.TaskEnvironmentID = envID
 	default:
@@ -834,7 +834,7 @@ func (r *Repository) bindReadySharedGroupEnvironment(
 	case models.TaskEnvironmentStatusReady, models.TaskEnvironmentStatusStopped:
 		session.TaskEnvironmentID = environmentID
 	case models.TaskEnvironmentStatusCreating:
-		return fmt.Errorf("%w: retry after the shared workspace launch completes", models.ErrWorkspacePreparing)
+		return &models.WorkspacePreparingError{EnvironmentID: environmentID, Reason: "retry after the shared workspace launch completes"}
 	default:
 		return fmt.Errorf("%w: shared workspace is not attachable", models.ErrWorkspaceReuseUnsafe)
 	}
@@ -913,10 +913,15 @@ func (r *Repository) applyInitialRuntimeSeedTx(ctx context.Context, tx *sqlx.Tx,
 	if err != nil {
 		return err
 	}
-	var sessionCount int
-	if err := tx.QueryRowContext(ctx, r.db.Rebind(`SELECT COUNT(*) FROM task_sessions WHERE task_id = ?`), session.TaskID).Scan(&sessionCount); err != nil {
+	var sessionCount, primaryCount int
+	if err := tx.QueryRowContext(ctx, r.db.Rebind(`
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN is_primary = 1 THEN 1 ELSE 0 END), 0)
+		FROM task_sessions WHERE task_id = ?
+	`), session.TaskID).Scan(&sessionCount, &primaryCount); err != nil {
 		return fmt.Errorf("check task sessions before workspace binding: %w", err)
 	}
+	// The task lock or SQLite writer serializes primary election with insertion.
+	session.IsPrimary = session.IsPrimary && primaryCount == 0
 	if sessionCount == 0 {
 		if session.Metadata == nil {
 			session.Metadata = make(map[string]interface{})

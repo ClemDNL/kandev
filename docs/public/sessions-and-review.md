@@ -30,6 +30,11 @@ The New Session dialog does not accept a session name. Rename the session from i
 
 The empty-panel watermark has the same **New Agent** action. On mobile, open the **Sessions** picker and select **New session**.
 
+If simultaneous starts are still preparing the shared workspace, the later
+start waits for that preparation and tries to attach once. Failed or unfinished
+preparation leaves the start retryable without creating another workspace.
+Later sessions preserve the existing primary session and its initial settings.
+
 The profile picker shows only profiles compatible with the task executor. If none are available, use the link in the dialog to configure an executor or agent profile. See [Agents and profiles](agents-and-profiles.md).
 
 ### Choose starting context
