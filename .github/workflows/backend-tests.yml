@@ -897,6 +897,16 @@ jobs:
           go test -race -v ./internal/agentctl/server/instance -run '^TestAllocatePortAndListenerRetriesAddressInUse$'
           go test -race -v ./internal/gateway/websocket -run '^TestResolveAndBindReportsOccupiedPort$'
 
+      - name: Test Windows loopback listeners
+        if: matrix.suite == 'native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race -v -timeout 10m ./internal/common/portutil ./internal/common/netprobe ./internal/agentctl/server/config ./cmd/plugin-fixture
+          go test -race -v -timeout 10m ./internal/gateway/websocket -run 'Tunnel|ResolveAndBind|ConcurrentFailingStarts'
+          go test -race -v -timeout 10m ./internal/launcher -run 'TestPickPorts|TestPickDevPorts|TestCanBind|TestWaitForHealthBypassesHTTPProxyForSpecificBind'
+          go test -race -v -timeout 10m ./internal/agentctl/server/api -run '^(TestHandleVscodeStart_Success|TestHandleVscodeStatus_AfterStart|TestVscodeOpenFile_WaitsForRunning_E2E)$'
+
       # Keep this targeted: the service package has broad subprocess coverage,
       # while this native test is the Windows path-semantics regression.
       - name: Test Windows path semantics

@@ -400,6 +400,11 @@ test-windows:
 	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v ./internal/common/netutil -run TestIsAddrInUse
 	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v ./internal/agentctl/server/instance -run TestAllocatePortAndListenerRetriesAddressInUse
 	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v ./internal/gateway/websocket -run TestResolveAndBindReportsOccupiedPort
+	@echo "Running Windows loopback listener tests..."
+	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v -timeout 10m ./internal/common/portutil ./internal/common/netprobe ./internal/agentctl/server/config ./cmd/plugin-fixture
+	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v -timeout 10m ./internal/gateway/websocket -run "Tunnel|ResolveAndBind|ConcurrentFailingStarts"
+	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v -timeout 10m ./internal/launcher -run "TestPickPorts|TestPickDevPorts|TestCanBind|TestWaitForHealthBypassesHTTPProxyForSpecificBind"
+	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v -timeout 10m ./internal/agentctl/server/api -run "^(TestHandleVscodeStart_Success|TestHandleVscodeStatus_AfterStart|TestVscodeOpenFile_WaitsForRunning_E2E)$$"
 	@echo "Running Windows SQLite database path tests..."
 	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v ./internal/system/backups -run TestVerifySnapshotOpensNativeAbsolutePath
 	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v ./internal/task/inventoryrepair -run "^TestOpenDatabase(Reads|Writes)NativeAbsolutePath$$"
