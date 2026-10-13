@@ -874,6 +874,14 @@ jobs:
         if: matrix.suite == 'native'
         run: go test -tags fts5 -race -v -timeout 10m ./internal/common/subproc -run '^TestNewGitCommand'
 
+      - name: Test Windows Hermes ACP detection
+        if: matrix.suite == 'native'
+        timeout-minutes: 10
+        env:
+          GOMAXPROCS: '2'
+          GOMEMLIMIT: 512MiB
+        run: go test -trimpath -tags fts5 -race -p=1 -count=1 -v -timeout 5m ./internal/agent/agents -run '^Test(HermesACP|RunCommandCheck)'
+
       # Keep this targeted: these packages have broader tests, while these
       # native tests verify hidden consoles retain handles for descendants.
       - name: Test Windows helper console behavior
