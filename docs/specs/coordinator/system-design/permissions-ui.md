@@ -268,4 +268,3 @@ notice of [Watches UI](#watches-ui) with **Choose boards** (a link to
 Needs you is `/workspaces/:id/coordinator/:cid`, a different page). The Queue groups are empty and each empty
 group shows the phase-1 empty text; the count strip shows zeros (a filtered
 zero, not an unavailable state).
-
