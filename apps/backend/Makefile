@@ -388,6 +388,8 @@ test:
 test-windows:
 	@echo "Running Windows-sensitive packages..."
 	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v ./internal/agentctl/server/process/... ./internal/agent/runtime/agentctl/launcher/... ./internal/backendapp/ownershiplock/... ./internal/system/storage/workspaces/...
+	@echo "Running Windows Git executable memo tests..."
+	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -race -v -timeout 10m ./internal/common/subproc -run "^TestNewGitCommand"
 	@echo "Running Windows helper console-behavior tests..."
 	$(CGO_LOCALE) $(CGO_PREFIX) $(GO) test -trimpath -tags fts5 -v ./internal/common/subproc ./internal/agent/mcpconfig ./internal/agentctl/server/utility ./internal/agent/acpdbg ./internal/agent/codexdbg -run "^(TestWindowsPrepareGitLifecycleCommandHidesConsoleWindow|TestWindowsDetachedParentKeepsConsoleHiddenForDescendants|TestPrepareNativeMCPProcessHidesConsoleWindow|TestWindowsACPCommandProcAttrHidesConsoleWindow|TestConfigureProcessTreeHidesConsoleWindow)$$"
 	@echo "Running Windows runtime observation command-shim tests..."

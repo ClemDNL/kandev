@@ -870,6 +870,10 @@ jobs:
         if: matrix.suite == 'native'
         run: go test -tags fts5 -race -v -json -timeout 25m -run '^TestRecoverySnapshotPreservesWindowsReadOnlyMode$' ./internal/worktree
 
+      - name: Test Windows Git executable memo
+        if: matrix.suite == 'native'
+        run: go test -tags fts5 -race -v -timeout 10m ./internal/common/subproc -run '^TestNewGitCommand'
+
       # Keep this targeted: these packages have broader tests, while these
       # native tests verify hidden consoles retain handles for descendants.
       - name: Test Windows helper console behavior

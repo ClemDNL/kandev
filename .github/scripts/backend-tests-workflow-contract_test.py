@@ -128,6 +128,7 @@ class BackendTestsWorkflowContractTest(unittest.TestCase):
             "Test Windows copy-file glob tokenization",
             "Build", "Vet", "Test windows-sensitive packages",
             "Test Windows helper console behavior",
+            "Test Windows Git executable memo",
             "Test Windows managed runtime cache repair",
             "Test Windows port collision handling",
             "Test Windows path semantics",
@@ -141,6 +142,28 @@ class BackendTestsWorkflowContractTest(unittest.TestCase):
         self.assertIn("- test-windows", gate)
         self.assertIn("TEST_WINDOWS_RESULT: ${{ needs['test-windows'].result }}", gate)
         self.assertIn('"test-windows:${TEST_WINDOWS_RESULT}"', gate)
+
+    def test_windows_git_executable_memo_runs_in_native_suite(self) -> None:
+        step = step_block(self.workflow, "Test Windows Git executable memo")
+        self.assertIn("if: matrix.suite == 'native'", step)
+        self.assertNotIn("continue-on-error", step)
+        command = shlex.split(step.partition("run: ")[2].splitlines()[0])
+        self.assertEqual(command[:2], ["go", "test"])
+        self.assertIn("./internal/common/subproc", command)
+        self.assertIn("-race", command)
+        self.assertEqual(command[command.index("-tags") + 1], "fts5")
+        self.assertEqual(command[command.index("-timeout") + 1], "10m")
+        selection = command[command.index("-run") + 1]
+        source = (REPO_ROOT / "apps/backend/internal/common/subproc/git_command_test.go").read_text()
+        tests = re.findall(r"^func (TestNewGitCommand\w+)\(", source, re.MULTILINE)
+        self.assertIn("TestNewGitCommandResolvesAgainWhenPathExtChanges", tests)
+        for name in tests:
+            with self.subTest(test=name):
+                self.assertRegex(name, selection)
+        makefile = (REPO_ROOT / "apps/backend/Makefile").read_text()
+        target = makefile.partition("\ntest-windows:\n")[2].partition("\n## ")[0]
+        self.assertIn('./internal/common/subproc -run "^TestNewGitCommand"', target)
+        self.assertIn('-tags fts5 -race -v -timeout 10m ./internal/common/subproc', target)
 
     def test_windows_runtime_observation_shims_run_in_native_suite(self) -> None:
         step = step_block(self.workflow, "Test Windows runtime observation command shims")
