@@ -2,7 +2,7 @@ import { devices, type Page } from "@playwright/test";
 import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { backendFixture, type BackendContext } from "./backend";
+import { backendFixture, reportUnexpectedBackendFailure, type BackendContext } from "./backend";
 import { restoreSeedRepositoryOrigin } from "./seed-repository-origin";
 export { restoreSeedRepositoryOrigin } from "./seed-repository-origin";
 import { ApiClient } from "../helpers/api-client";
@@ -427,6 +427,7 @@ export const test = backendFixture.extend<
         // selection, and a stale selection can hide default-priority tasks in
         // unrelated tests that run later in the same worker.
         kanban_priority_filter_tokens: [],
+        kanban_hidden_step_ids: {},
         tasks_list_sort: "updated_desc",
         tasks_list_group: "state",
       });
@@ -502,7 +503,7 @@ export const test = backendFixture.extend<
   },
 
   integrationCleanup: [
-    async ({ apiClient, backend, seedData }, use) => {
+    async ({ apiClient, backend, seedData }, use, testInfo) => {
       await backend.ensureReady();
       const scoped = `workspace_id=${encodeURIComponent(seedData.workspaceId)}`;
       await apiClient.rawRequest("DELETE", `/api/v1/jira/config?${scoped}`).catch(() => undefined);
@@ -544,6 +545,7 @@ export const test = backendFixture.extend<
       try {
         await use();
       } finally {
+        reportUnexpectedBackendFailure(backend.tmpDir, testInfo);
         await apiClient.clearGitLabRepositoryRemote(seedData.repositoryId).catch(() => undefined);
         restoreSeedRepositoryOrigin(seedData, { refreshTrackingRefs: false });
       }
@@ -673,6 +675,7 @@ test.beforeEach(async ({ apiClient, backend, seedData }) => {
       // selection, and a stale selection can hide default-priority tasks in
       // unrelated tests that run later in the same worker.
       kanban_priority_filter_tokens: [],
+      kanban_hidden_step_ids: {},
       task_create_last_used: {
         repository_id: seedData.repositoryId,
         branch: "main",

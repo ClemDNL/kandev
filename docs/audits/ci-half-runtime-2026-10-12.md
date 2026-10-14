@@ -1,13 +1,38 @@
-# Halving test execution time
+# Halving E2E execution time
 
 Status: implementation and verification in progress.
 
-The user requested a 50% time reduction after draft PR #4440 reached
-`dc36fe3f709ebe35bce51dbdb203c66ae213f4eb`. That head is the reference:
-frontend Run tests took 2,008 seconds; the longest normal E2E test step took
-2,159 seconds. The respective targets are 1,004 and 1,079.5 seconds. Workflow
-elapsed time and runner-minutes are separate measures; queue variability must
-not be presented as an execution improvement.
+The user clarified on October 13 that the 50% target applies to E2E.
+The reference remains draft PR #4440 head
+`dc36fe3f709ebe35bce51dbdb203c66ae213f4eb`: its longest normal E2E test step
+took 2,159 seconds, giving a target of 1,079.5 seconds. Frontend improvements
+recorded below are useful separate work and do not count toward this target.
+Workflow elapsed time and runner-minutes are separate measures; queue
+variability must not be presented as an execution improvement.
+
+PR #4440 merged as `b706496d5b2e54e1cebc1e13f38b516e041d8ec1`.
+The E2E target remains open. The follow-up starts with the measured shared-PTY
+cleanup bottleneck in [the implementation plan](../plans/shared-pty-close/plan.md),
+then audits repeated E2E journeys without removing distinct regression coverage.
+
+## Merged-parent E2E result
+
+[Run 38388102356](https://github.com/kdlbs/kandev/actions/runs/38388102356),
+attempt 1 at head `57ee8042d739574f173bff434273c2a49681f598`, passed before
+PR #4440 merged. Its longest normal test step was 2161 seconds (36m01s),
+compared with the fixed 2159-second reference. E2E execution is effectively
+unchanged, and the 50% target is not achieved.
+
+The 14 normal test steps accumulated 27316 seconds versus 27739 seconds in
+the reference (about 1.5% lower). Workflow elapsed fell from 4084 to 3033
+seconds, but the latest normal shard began 683 seconds after the trigger
+instead of 1643 seconds. That improvement is largely queue/prerequisite
+timing and must not be attributed to faster tests. These accumulated test-step
+seconds exclude setup and container jobs; they are not total billed runner time.
+
+The follow-up local measurements and coverage map are tracked in the
+[PTY plan](../plans/shared-pty-close/plan.md) and
+[workflow-switch audit](workflow-switch-consolidation-2026-10-13.md).
 
 ## Cost evidence
 
@@ -341,3 +366,24 @@ now reports 3,960 configured instances: Chromium 2,702; mobile 1,059; auth 37;
 routing nine; containers 152; Kubernetes compatibility one. Relative to the
 whole-branch starting inventory, 153 repeated/obsolete configured instances
 have been removed; no runtime percentage is inferred from that count.
+
+## Follow-up E2E run (2026-10-13)
+
+PR #4457's first E2E run, `38405876470` at `f5466aafe8`, passed all normal and
+container shards. The longest normal test step was 2,126s (35m26s), versus
+2,161s on the merged parent and the fixed 2,159s original reference. This is
+only a **1.53% reduction against the target reference**; 50% is not achieved.
+The sum of 14 normal test steps fell from the merged parent's 27,316s to
+25,078s (8.19% lower). Workflow elapsed increased from 3,033s to 3,454s
+(50m33s to 57m34s) as the last normal job started 1,448s after the trigger,
+versus 683s on the parent. Do not count queue changes as execution savings.
+
+That run predates the portable poller correction and the Git/Quick Chat
+consolidation. The first head's added native macOS PTY check failed because
+its master file had no Go poller registration; `58eb30d5be` adds explicit
+registration and a reproducing regression. Its native check remains pending
+until the next push. The later local two-file audit preserves all 50 scenarios
+in 44 cases and measures 381.425s to 316.745s (16.96% lower), including repair
+of a branch-cleanup ordering defect that previously triggered a 30-second
+reset failure and backend recovery. See the dedicated Git/Quick Chat ledger
+for assertion mappings, mutation evidence and measurement scope.

@@ -4,12 +4,73 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, test } from "vitest";
+import { describe, test, vi } from "vitest";
 
-import { observeLogFile, runOwnedBackendFixture, waitForHealth } from "../fixtures/backend";
+import {
+  observeLogFile,
+  reportUnexpectedBackendFailure,
+  runOwnedBackendFixture,
+  waitForHealth,
+} from "../fixtures/backend";
 import { stopSSHServer, type SSHServerHandle } from "./ssh";
 
 describe("backend fixture lifecycle", () => {
+  test("reports a test-body failure without logging passing, skipped or expected failures", () => {
+    const ownedDir = fs.mkdtempSync(path.join(os.tmpdir(), "kandev-test-body-backend-"));
+    fs.writeFileSync(path.join(ownedDir, "backend-process.log"), "backend disconnected");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const status of ["passed", "skipped", undefined] as const) {
+        reportUnexpectedBackendFailure(ownedDir, { status, expectedStatus: "passed" });
+      }
+      reportUnexpectedBackendFailure(ownedDir, { status: "failed", expectedStatus: "failed" });
+      assert.equal(output.mock.calls.length, 0);
+      for (const status of ["failed", "timedOut", "interrupted"] as const) {
+        reportUnexpectedBackendFailure(ownedDir, { status, expectedStatus: "passed" });
+      }
+      assert.equal(output.mock.calls.length, 3);
+      assert.match(output.mock.calls.flat().join(" "), /backend disconnected/);
+      assert.equal(fs.existsSync(ownedDir), true);
+    } finally {
+      output.mockRestore();
+      fs.rmSync(ownedDir, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves a bounded log tail before deleting a failed fixture", async () => {
+    const ownedDir = fs.mkdtempSync(path.join(os.tmpdir(), "kandev-failed-backend-"));
+    const failure = new Error("backend exited");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const child = Object.assign(new EventEmitter(), {
+      waitForLogFile: async () => {
+        fs.writeFileSync(
+          path.join(ownedDir, "backend-process.log"),
+          "x".repeat(20_000) + "bind failed",
+        );
+      },
+    }) as unknown as ChildProcess;
+    try {
+      await assert.rejects(
+        runOwnedBackendFixture(
+          ownedDir,
+          async (register) => {
+            register(child);
+            throw failure;
+          },
+          { stopProcess: async () => {} },
+        ),
+        (error) => error === failure,
+      );
+      assert.equal(fs.existsSync(ownedDir), false);
+      const text = output.mock.calls.flat().join(" ");
+      assert.match(text, /bind failed/);
+      assert.ok(text.length < 9_000);
+    } finally {
+      output.mockRestore();
+      fs.rmSync(ownedDir, { recursive: true, force: true });
+    }
+  });
+
   test("fails fast when the backend exited before health polling began", async () => {
     const exitedProcess = Object.assign(new EventEmitter(), {
       exitCode: 17,
