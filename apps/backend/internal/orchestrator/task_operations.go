@@ -5669,6 +5669,7 @@ func (s *Service) StopSession(ctx context.Context, sessionID string, reason stri
 		return err
 	}
 	s.clearDynamicUnclassifiedStreakForStop(ctx, sessionID)
+	s.settleOpenBackgroundWork(ctx, sessionID)
 	return nil
 }
 
@@ -5680,10 +5681,18 @@ func (s *Service) StopSessionSynchronously(ctx context.Context, sessionID string
 	if s.lspLeases != nil {
 		s.lspLeases.StopLSPLeasesForSession(sessionID)
 	}
+	stoppedExecutionID := ""
+	if s.agentManager != nil {
+		executionID, err := s.agentManager.GetExecutionIDForSession(ctx, sessionID)
+		if err == nil {
+			stoppedExecutionID = executionID
+		}
+	}
 	if err := s.executor.StopSessionSynchronously(ctx, sessionID, reason, force); err != nil {
 		return err
 	}
 	s.clearDynamicUnclassifiedStreakForStop(ctx, sessionID)
+	s.settleBackgroundWork(ctx, sessionID, stoppedExecutionID)
 	return nil
 }
 
