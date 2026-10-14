@@ -98,6 +98,9 @@ func (h *Handlers) wsRouteAction(ctx context.Context, msg *ws.Message) (*ws.Mess
 		if errors.Is(err, orchestrator.ErrRouteActionActiveTurn) {
 			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeConflict, err.Error(), nil)
 		}
+		if errors.Is(err, orchestrator.ErrRouteActionRequiresDynamicProfile) {
+			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeValidation, err.Error(), nil)
+		}
 		h.logger.Warn("route action failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeInternalError, "route action failed", nil)
 	}

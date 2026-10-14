@@ -512,6 +512,13 @@ func decodePolicyState(raw string) PolicyState {
 	return state
 }
 
+// CandidateUnclassifiedEnabled reports whether a candidate's repeated
+// unclassified policy is enabled with a threshold the engine will admit.
+func CandidateUnclassifiedEnabled(profile Profile, candidateID string) bool {
+	_, threshold := candidateUnclassifiedThreshold(profile, candidateID)
+	return threshold >= 2 && threshold <= 10
+}
+
 func candidateUnclassifiedThreshold(profile Profile, candidateID string) (Candidate, int64) {
 	candidate, found := candidateByID(profile, candidateID)
 	if !found || candidate.Policies.Unclassified == nil || !candidate.Policies.Unclassified.Enabled {

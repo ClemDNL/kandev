@@ -50,10 +50,11 @@ func isNoActiveTurnError(err error) bool {
 
 // Common errors
 var (
-	ErrServiceAlreadyRunning            = errors.New("service is already running")
-	ErrServiceNotRunning                = errors.New("service is not running")
-	ErrRouteActionActiveTurn            = errors.New("route actions require a settled turn")
-	ErrIdleSuspensionProvenanceRequired = errors.New("session is not suspended by the workspace idle policy")
+	ErrServiceAlreadyRunning             = errors.New("service is already running")
+	ErrServiceNotRunning                 = errors.New("service is not running")
+	ErrRouteActionActiveTurn             = errors.New("route actions require a settled turn")
+	ErrRouteActionRequiresDynamicProfile = errors.New("route actions are only available for sessions using a dynamic profile")
+	ErrIdleSuspensionProvenanceRequired  = errors.New("session is not suspended by the workspace idle policy")
 )
 
 const maxStartupTransferReconcileAttempts = 30
@@ -1551,6 +1552,9 @@ type Service struct {
 	// callback. Each entry retains the prompt and route identity that authorized
 	// the reset across prompt-evidence replacement.
 	pendingDynamicStreakResets sync.Map
+	// countedEmptyTurns records, per session, the execution and prompt
+	// generation whose empty end_turn was counted as an unclassified failure.
+	countedEmptyTurns sync.Map
 
 	// resumeAttempts owns process-local startup identity. It is separate from
 	// dynamicAttemptEvidence because a provider execution may be reused by

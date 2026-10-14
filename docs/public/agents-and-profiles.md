@@ -558,7 +558,9 @@ failures; a disabled policy must use a threshold of `0`.
 Kandev counts only a current task-session failure that has complete trusted
 evidence and no output or tool activity. Eligible errors are a terminal
 `unknown_provider_error` before output, or a typed agent process-start or
-session-initialization `agent_runtime_error`. For provider errors, each counted
+session-initialization `agent_runtime_error`. A turn that ends normally
+(`end_turn`) with no assistant text, reasoning, or tool activity also counts;
+consecutive empty turns match each other. For provider errors, each counted
 failure must have the same code, origin, phase, provider, and complete
 diagnostic. Kandev normalizes whitespace only; case and punctuation remain
 significant. Diagnostics that need redaction or truncation stay on manual

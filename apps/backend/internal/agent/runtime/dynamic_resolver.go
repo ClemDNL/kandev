@@ -278,6 +278,23 @@ func (r *ProfileExecutionResolver) ClaimUnclassifiedFallbackLaunch(
 	return r.engine.ClaimUnclassifiedFallbackLaunch(ctx, decision, evidence)
 }
 
+// UnclassifiedPolicyEnabled reports whether a concrete candidate of a logical
+// profile has an enabled repeated unclassified policy. Any load failure
+// reports false, so a caller keeps its ordinary behavior.
+func (r *ProfileExecutionResolver) UnclassifiedPolicyEnabled(
+	ctx context.Context,
+	profileID, candidateID string,
+) bool {
+	if r == nil || profileID == "" || candidateID == "" {
+		return false
+	}
+	profile, err := r.loadDynamicProfile(ctx, profileID)
+	if err != nil {
+		return false
+	}
+	return dynamic.CandidateUnclassifiedEnabled(profile, candidateID)
+}
+
 // ClearUnclassifiedStreak removes the session-owned count after a current
 // successful output/effect/turn event has been validated by the orchestrator.
 func (r *ProfileExecutionResolver) ClearUnclassifiedStreak(

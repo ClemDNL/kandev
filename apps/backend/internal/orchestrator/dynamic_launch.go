@@ -239,31 +239,35 @@ func (s *Service) persistDynamicACPSession(
 
 // markDynamicRouteActive completes the durable "starting" -> "active"
 // transition after a concrete launch has actually succeeded, and mirrors the
-// status onto the task-session projection so both durable stores agree.
-// Best-effort: a launch that already succeeded is not undone by a failure to
-// record this side transition.
-func (s *Service) markDynamicRouteActive(ctx context.Context, sessionID string, generation int64) {
+// status onto the task-session projection so both durable stores agree. A stale
+// generation or a missing route leaves the route unchanged and is not an error.
+// Any other failure to complete the transition is returned so a caller that
+// owns the operation's success does not report it while the route is still
+// "starting".
+func (s *Service) markDynamicRouteActive(ctx context.Context, sessionID string, generation int64) error {
 	if s.profileExecutionResolver == nil || sessionID == "" || generation <= 0 {
-		return
+		return nil
 	}
 	if err := s.profileExecutionResolver.MarkRouteActive(ctx, sessionID, generation); err != nil {
-		if !errors.Is(err, dynamicruntime.ErrStaleGeneration) && !errors.Is(err, dynamicruntime.ErrRouteStateNotFound) {
-			s.logger.Warn("failed to mark dynamic route active",
-				zap.String("session_id", sessionID), zap.Error(err))
+		if errors.Is(err, dynamicruntime.ErrStaleGeneration) || errors.Is(err, dynamicruntime.ErrRouteStateNotFound) {
+			return nil
 		}
-		return
+		s.logger.Warn("failed to mark dynamic route active",
+			zap.String("session_id", sessionID), zap.Error(err))
+		return err
 	}
 	session, err := s.repo.GetTaskSession(ctx, sessionID)
 	if err != nil || session == nil || session.RouteGeneration != generation {
-		return
+		return nil
 	}
 	if loader, ok := s.repo.(dynamicRouteStateLoader); ok {
 		state, loadErr := loader.LoadRouteState(ctx, sessionID)
 		if loadErr != nil || state == nil || state.Generation != generation || state.Status != dynamicRouteStatusActive {
-			return
+			return nil
 		}
 	}
 	s.mirrorDynamicRouteProjection(ctx, session, generation, dynamicRouteStatusActive, session.RouteReason)
+	return nil
 }
 
 // markDynamicRouteActionRequired transitions a claimed dynamic route to
@@ -386,10 +390,14 @@ func (s *Service) handleAgentProcessStarted(
 	if session.AgentExecutionID != "" && agentExecutionID != "" && session.AgentExecutionID != agentExecutionID {
 		return
 	}
-	if session.State != models.TaskSessionStateStarting && session.State != models.TaskSessionStateRunning {
+	// A resumed or prepared runtime settles to WAITING_FOR_INPUT before this
+	// callback runs. The process did start for this exact execution, so its
+	// claimed route is active.
+	if session.State != models.TaskSessionStateStarting && session.State != models.TaskSessionStateRunning &&
+		session.State != models.TaskSessionStateWaitingForInput {
 		return
 	}
-	s.markDynamicRouteActive(ctx, sessionID, session.RouteGeneration)
+	_ = s.markDynamicRouteActive(ctx, sessionID, session.RouteGeneration)
 }
 
 // handleAgentProcessStartFailed settles a claimed dynamic route when process
@@ -1775,7 +1783,7 @@ func (s *Service) launchPreparedDynamicRelaunch(
 			return dynamicRelaunchFailed
 		}
 		if session != nil {
-			s.markDynamicRouteActive(context.WithoutCancel(ctx), data.SessionID, session.RouteGeneration)
+			_ = s.markDynamicRouteActive(context.WithoutCancel(ctx), data.SessionID, session.RouteGeneration)
 		}
 		seam5Res.consume()
 		return dynamicRelaunchSucceeded
