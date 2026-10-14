@@ -134,6 +134,9 @@ type taskResourceCleanupSnapshot struct {
 	// paths this job has removed and confirmed absent. A root persists for
 	// the life of the job; it is never removed from this list once added.
 	OrphanReapRoots []string `json:"orphan_reap_roots,omitempty"`
+	// AgentHistory records a deleted Quick Chat's agent history identities.
+	// Absent-tolerant: older job rows decode with none and remove nothing.
+	AgentHistory []agentHistoryTarget `json:"agent_history,omitempty"`
 	// OrphanReapRecords carries one outcome per candidate process this job
 	// has reaped or deliberately skipped, keyed by PID. A re-detected PID's
 	// record is replaced by the current attempt's outcome; a PID not
@@ -236,6 +239,7 @@ func (s *Service) persistTaskResourceCleanupWithManagedClaim(
 		TaskEnvironment:        envCleanup.env,
 		DeleteEnvironmentRow:   envCleanup.deleteRow,
 		LegacyWorktreeCleanup:  s.hasLegacyWorktreeCleanup(),
+		AgentHistory:           envCleanup.agentHistory,
 	}
 	if collectSSH {
 		sshTaskDirs, err := s.gatherSSHReclaimTargets(ctx, taskID)
@@ -1326,8 +1330,10 @@ func (s *Service) executeTaskResourceCleanupJob(
 			env: snapshot.TaskEnvironment, deleteRow: snapshot.DeleteEnvironmentRow,
 			preserveBranches:       job.IsArchive(),
 			discardWorktreeChanges: snapshot.DiscardWorktreeChanges,
+			agentHistory:           snapshot.AgentHistory,
 		},
 		taskCleanupPreserveRows(stopOutcome))...)
+	s.removeQuickChatAgentHistory(ctx, job.TaskID, snapshot.AgentHistory, stopOutcome.failed)
 	if job.IsArchive() && len(failedStops) == 0 && len(errs) == 0 {
 		if cancelled, err := s.cancelIfTaskUnarchived(ctx, job); err != nil || cancelled {
 			// Worktrees may already be removed even when root cleanup is cancelled.
@@ -1762,6 +1768,9 @@ func (s *Service) PrepareTaskResourceCleanupWithOptions(
 		LegacyWorktreeCleanup:  s.hasLegacyWorktreeCleanup(),
 		SSHTaskDirs:            sshTaskDirs,
 		WorkspaceID:            task.WorkspaceID,
+	}
+	if taskResourceCleanupDeletesTask(trigger) {
+		snapshot.AgentHistory = s.captureQuickChatAgentHistory(ctx, task, sessions)
 	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
