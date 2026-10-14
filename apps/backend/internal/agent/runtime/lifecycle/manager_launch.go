@@ -19,6 +19,7 @@ import (
 	kubeexecutor "github.com/kandev/kandev/internal/agent/kubernetes"
 	"github.com/kandev/kandev/internal/agent/managedruntime"
 	"github.com/kandev/kandev/internal/agent/runtime/activity"
+	"github.com/kandev/kandev/internal/agent/runtime/routingerr"
 	"github.com/kandev/kandev/internal/agent/settings/cliflags"
 	"github.com/kandev/kandev/internal/agentruntime"
 	"github.com/kandev/kandev/internal/common/mcpmode"
@@ -872,11 +873,11 @@ func (m *Manager) resolveOtherManagedRuntimeOptions(
 
 func validateBuiltAgentCommands(args, continueArgs []string) error {
 	if err := cliflags.ValidateCommandArgs(args); err != nil {
-		return fmt.Errorf("validate agent command: %w", err)
+		return &routingerr.BuiltCommandValidationError{Command: "agent", Cause: err}
 	}
 	if continueArgs != nil {
 		if err := cliflags.ValidateCommandArgs(continueArgs); err != nil {
-			return fmt.Errorf("validate continue command: %w", err)
+			return &routingerr.BuiltCommandValidationError{Command: "continue", Cause: err}
 		}
 	}
 	return nil
