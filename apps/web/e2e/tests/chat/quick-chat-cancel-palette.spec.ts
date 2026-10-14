@@ -44,6 +44,7 @@ function commandDialog(page: Page) {
 }
 
 test.describe.serial("Quick Chat cancellation palette and composer", () => {
+  test.describe.configure({ retries: 0 });
   test.afterEach(async ({ backend }, testInfo) => {
     if (testInfo.status === testInfo.expectedStatus) return;
     await testInfo.attach("quick-chat-cancellation-backend.log", {
@@ -168,6 +169,7 @@ test.describe.serial("Quick Chat cancellation palette and composer", () => {
     await waitForQuickChatSessionSettled(testPage, quickSessionId, 75_000);
     await waitForQuickChatDirectInput(quickChat);
     await sendQuickChatMessage(quickChat, testPage, "/e2e:bulk:2");
+    await waitForAgentMessage(apiClient, quickSessionId, "Done. Emitted 2 messages", 30_000);
     await expect(quickChat.getByText("Done. Emitted 2 messages", { exact: false })).toBeVisible();
     await waitForActiveSessionForegroundActivity(testPage, "generating");
 
