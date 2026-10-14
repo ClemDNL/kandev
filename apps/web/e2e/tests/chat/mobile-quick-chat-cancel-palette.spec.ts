@@ -82,13 +82,20 @@ test.describe.serial("Mobile Quick Chat cancellation", () => {
     await testPage.getByTestId("mobile-quick-chat-button").tap();
 
     const quickChat = testPage.getByRole("dialog", { name: "Quick Chat" });
-    const { session_id: quickSessionId } = await startQuickChatFromSetup(quickChat, testPage);
+    const { task_id: quickTaskId, session_id: quickSessionId } = await startQuickChatFromSetup(
+      quickChat,
+      testPage,
+    );
+    await waitForSessionSettledBaseline(apiClient, quickTaskId, quickSessionId);
     await sendQuickChatMessage(quickChat, testPage, "/slow 30s");
-    await expect(
-      quickChat.getByRole("status", { name: /Agent is (starting|running)/ }),
-    ).toBeVisible({
-      timeout: 15_000,
-    });
+    await waitForAgentMessage(
+      apiClient,
+      quickSessionId,
+      "Running slow response (30s total)",
+      30_000,
+    );
+    expect(await waitForActiveQuickChatSupportsSteering(testPage)).toBe(quickSessionId);
+    await waitForActiveQuickChatForegroundActivity(testPage, "generating");
 
     await testPage.keyboard.press("Control+k");
     const palette = commandDialog(testPage);
@@ -102,6 +109,7 @@ test.describe.serial("Mobile Quick Chat cancellation", () => {
     await cancelOption.tap();
 
     await expect(quickChat.getByTestId("cancel-agent-button")).toBeDisabled({ timeout: 5_000 });
+    await waitForQuickChatSessionSettled(testPage, quickSessionId);
     await waitForQuickChatDirectInput(quickChat);
     await sendQuickChatMessage(quickChat, testPage, "/e2e:bulk:2");
     await waitForAgentMessage(apiClient, quickSessionId, "Done. Emitted 2 messages", 30_000);

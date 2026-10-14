@@ -7,7 +7,7 @@ requirements:
   - REQ-TASKS-ADDITIONAL-SESSION-WORKSPACE-REUSE-003
   - REQ-TASKS-ADDITIONAL-SESSION-WORKSPACE-REUSE-004
 created: 2026-08-30
-updated: 2026-10-02
+updated: 2026-10-14
 owners:
   - kandev
 ---
@@ -235,6 +235,55 @@ The task is not projected as environment-ready until launch admission passes.
 Files, changes, terminal, and agent-start surfaces use only the selected and
 validated environment. Cached changes from a rejected workspace may remain in
 historical records but cannot become the current task change projection.
+
+## Kubernetes inherited environment admission
+
+The [Kubernetes task-pod design](../../executors/system-design/kubernetes-task-pod.md)
+permits independent sessions within one task and deliberately excludes cross-task
+pod attachment. A ready parent environment therefore does not prove that a
+different task can consume it, even when both select the same Kubernetes profile.
+
+For `inherit_parent` and `shared_group`, resolve the canonical environment and
+effective executor before persisting or publishing a destination session. When
+the selected runtime is Kubernetes and the environment owner differs from the
+destination task, return the typed `workspace_reuse_unsupported` failure required
+by `AC-TASKS-ADDITIONAL-SESSION-WORKSPACE-REUSE-001.4`. Do not rewrite ownership,
+allocate replacement compute, switch executors, or change workspace mode.
+Missing or inconsistent ownership remains unsafe reuse rather than unsupported
+reuse. Existing executor-mismatch admission keeps its own failure category.
+
+Use the common preparation/start admission seam in `internal/orchestrator/` so
+workspace-only prepare, ensure, explicit start, and MCP session launch agree.
+The shared-group binding transaction checks the selected environment against
+the candidate executor and destination owner before saving the session, including
+when the group becomes materialized after preflight. Compare known environment
+and candidate executor types for every executor. Parent and group propagation
+also recheck admission using the prepared session's resolved executor before
+binding an environment that became available after preflight; an admission
+failure uses the existing session compensation path. Recheck the resolved
+binding before lifecycle attachment for already-persisted legacy sessions.
+Retain Kubernetes lifecycle's owner/generation checks as the final guard; orchestrator preflight does not authorize foreign resources.
+
+Map unsupported reuse to `CONFLICT` with bounded recoverability details in
+`session.launch`, `session.ensure`, and `spawn_session_kandev`. Guidance tells
+the caller to create a separate task with `workspace_mode="new_workspace"`
+using the intended executor profile. Repeating unchanged inheritance or restoring
+the parent workspace cannot make cross-task Kubernetes sharing supported.
+Deferred task creation remains successful and keeps its parent-dependent mode
+default; this admission applies when a workspace or agent launch is requested.
+
+The browser's admitted `session.ensure` request keeps ownership through
+same-task session-list and workflow hydration. Its success or typed rejection
+must settle the pending state and reach the existing recovery presentation.
+Task identity generations, retry identity, and mount lifetime exclude stale
+results. Explicit disable, unknown or archived eligibility, and pending task
+removal revoke response ownership and reset the latch. Later re-enablement
+admits a fresh request without reviving the previous response. Session-list
+and workflow hydration alone do not invalidate the admitted request.
+
+The [repair plan](../../../plans/kubernetes-inherited-workspace-admission/plan.md)
+records the regression and paired live reproduction. This is conformance to the
+existing unsupported-reuse and task-pod contracts, not a new sharing policy.
 
 ## Failure and recovery
 

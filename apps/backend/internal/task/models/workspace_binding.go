@@ -9,8 +9,9 @@ import (
 // They deliberately describe state rather than filesystem details: callers can
 // offer a bounded retry without exposing a checkout path or branch name.
 var (
-	ErrWorkspacePreparing   = errors.New("workspace is preparing")
-	ErrWorkspaceReuseUnsafe = errors.New("workspace reuse is unsafe")
+	ErrWorkspacePreparing        = errors.New("workspace is preparing")
+	ErrWorkspaceReuseUnsafe      = errors.New("workspace reuse is unsafe")
+	ErrWorkspaceReuseUnsupported = errors.New("workspace reuse is unsupported")
 	// ErrTaskEnvironmentResetRequired is the reuse refusal for a failed task
 	// environment that still holds workspace resources. A start cannot
 	// re-materialize it; resetting the task environment clears it.
@@ -18,6 +19,11 @@ var (
 		"%w: the task environment failed with workspace resources; reset the task environment to start again",
 		ErrWorkspaceReuseUnsafe,
 	)
+)
+
+const (
+	WorkspaceReuseUnsupportedRetry   = "create a task with workspace_mode=\"new_workspace\""
+	WorkspaceReuseUnsupportedMessage = "the selected executor cannot reuse another task's workspace; " + WorkspaceReuseUnsupportedRetry
 )
 
 // WorkspacePreparingError is ErrWorkspacePreparing for a binding that lost the
