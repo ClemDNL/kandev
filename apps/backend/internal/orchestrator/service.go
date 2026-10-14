@@ -1250,10 +1250,11 @@ type Service struct {
 	// startCeilingSweeper / stopCeilingSweeper no-op. See ceiling_sweep.go.
 	ceilingSweeper *ceilingSweeper
 
-	// ceilingCredentialReminter re-mints short-lived Office runtime
-	// credentials immediately before a ceiling-deferred "start" replay. Nil
-	// is the common case; see CeilingLaunchCredentialReminter.
-	ceilingCredentialReminter CeilingLaunchCredentialReminter
+	// launchCredentialReminter re-mints short-lived Office runtime
+	// credentials immediately before a launch that carries Office run
+	// identity, so the token names the session the launch actually uses.
+	// Nil is the common case; see LaunchCredentialReminter.
+	launchCredentialReminter LaunchCredentialReminter
 
 	// lifecycleSweepCancel / lifecycleSweepWorkers own the one-shot
 	// background goroutine that runs reconcileTaskLifecycleTokens and
