@@ -839,6 +839,9 @@ func startAgentInfrastructure(
 	agentSettingsController.SetRoutingTierDependencyChecker(&routingTierDepsAdapter{
 		repo: repos.Office,
 	})
+	if services.DynamicProfileResolver != nil {
+		agentSettingsController.SetAccountBlockReleaser(services.DynamicProfileResolver)
+	}
 	// An enabled automation is a standing instruction to launch against a
 	// profile. Nothing is running, so it never reaches the active-session list,
 	// but deleting the profile would leave the schedule firing into nothing —

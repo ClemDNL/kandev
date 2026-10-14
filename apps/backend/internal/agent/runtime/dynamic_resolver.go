@@ -221,6 +221,25 @@ func (r *ProfileExecutionResolver) ResolveExecutionAfterFailure(
 	}, nil
 }
 
+// HoldAccountBlock keeps the concrete execution profile whose provider account
+// was restricted out of later selections until its owner releases it. An error
+// means the hold applies in memory but is not yet durable.
+func (r *ProfileExecutionResolver) HoldAccountBlock(executionProfileID string, code routingerr.Code) error {
+	if r == nil || r.engine == nil {
+		return nil
+	}
+	return r.engine.HoldAccountBlock(executionProfileID, code)
+}
+
+// ReleaseAccountBlock closes the owner-release hold of one concrete execution
+// profile and reports whether a hold was closed.
+func (r *ProfileExecutionResolver) ReleaseAccountBlock(_ context.Context, executionProfileID string) (bool, error) {
+	if r == nil || r.engine == nil {
+		return false, nil
+	}
+	return r.engine.ReleaseAccountBlock(executionProfileID)
+}
+
 // RouteAfterUnclassifiedFailure validates the logical profile and applies the
 // narrow repeated-failure policy only with evidence built by a trusted task
 // runtime boundary.
@@ -313,6 +332,9 @@ func (r *ProfileExecutionResolver) ResolveExisting(
 	}
 	if executionProfileID == "" || generation <= 0 {
 		return ProfileExecution{}, errors.New("dynamic session has no persisted execution profile")
+	}
+	if r.engine != nil && r.engine.Circuits().IsHeld(dynamic.ResourceKey(dynamic.ScopeAccountBlock, executionProfileID)) {
+		return ProfileExecution{}, dynamic.ErrExecutionProfileHeld
 	}
 	concrete, err := r.profiles.GetAgentProfile(ctx, executionProfileID)
 	if err != nil {

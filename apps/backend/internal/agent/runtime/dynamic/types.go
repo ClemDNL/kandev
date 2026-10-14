@@ -34,6 +34,10 @@ var (
 	// fail closed rather than silently degrade to a generation-only claim,
 	// which would let two concurrent callers both win the same transition.
 	ErrStatusClaimUnsupported = errors.New("dynamic route persistence does not support status-fenced claims")
+	// ErrExecutionProfileHeld refuses to resume a route on a profile held
+	// until its owner releases it. It is a pending recovery, so route action
+	// callers report the durable manual-recovery state.
+	ErrExecutionProfileHeld = fmt.Errorf("%w: execution profile is held until its owner releases it", ErrRecoveryPending)
 )
 
 type Candidate struct {

@@ -222,12 +222,15 @@ jobs:
       - name: Check Makefile shell dispatch
         run: make check-make-shells
 
+      - name: Check backend lint workflow contract
+        run: node --test ../../scripts/backend-lint-workflow.test.mjs
+
       - name: Resolve base SHA
         shell: bash
         working-directory: ${{ github.workspace }}
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
@@ -245,6 +248,8 @@ jobs:
             BASE_SHA="$(git merge-base HEAD "origin/${BASE_REF}")"
           elif [[ "${EVENT_NAME}" == "merge_group" ]]; then
             BASE_SHA="${MERGE_GROUP_BASE_SHA}"
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            BASE_SHA="$(git merge-base HEAD "origin/${BASE_REF}")"
           else
             BASE_SHA="${PUSH_BEFORE}"
           fi
@@ -262,7 +267,7 @@ jobs:
           set -euo pipefail
 
           CHANGED_GO_FILES="$(
-            git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${{ github.sha }}" -- apps/backend \
+            git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${{ github.sha }}" -- ':(top)apps/backend' \
             | grep -E '^apps/backend/.*\.go$' \
             || true
           )"
