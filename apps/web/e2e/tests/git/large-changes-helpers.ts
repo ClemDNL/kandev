@@ -173,7 +173,15 @@ export async function scrollChangesToEnd(page: Page, lastFileTestId: string): Pr
     };
   };
   try {
-    await expect.poll(getGeometry).toMatchObject({ within: true });
+    await expect
+      .poll(async () => {
+        await owner.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+          element.dispatchEvent(new Event("scroll"));
+        });
+        return getGeometry();
+      })
+      .toMatchObject({ within: true });
   } catch {
     const geometry = await getGeometry();
     expect(geometry.within, JSON.stringify(geometry)).toBe(true);

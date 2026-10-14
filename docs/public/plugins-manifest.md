@@ -502,7 +502,9 @@ validates submitted config against a specific subset of it before
 persisting:
 
 - `required` (an array of property names) is enforced; a `PATCH` missing a
-  required property is rejected.
+  required property is rejected. Until every required property has a value
+  (not missing, null, or a blank string), the plugin's `agent_tools` are not
+  offered to agents.
 - `type` (`string`, `boolean`, `number`, or `integer`) is checked against
   the submitted value.
 - `enum` membership is checked when present.

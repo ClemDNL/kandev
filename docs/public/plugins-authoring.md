@@ -278,6 +278,15 @@ the launch before creating an execution until an adapter passes the complete
 restriction tests and a real provider smoke. Do not treat the manifest surface
 or an approved capability as evidence that a provider is supported.
 
+Kandev lists a plugin's tools only while the plugin is active and every field in
+its `config_schema.required` list has a value. A required field counts as unset
+when it is missing, null, or a blank string; `false` and `0` count as set. A
+connector that needs a URL or token therefore stays out of the agent tool list
+until the operator saves its settings, and its tools appear right after the
+save, without restarting the agent or task session. Saving config still restarts
+a running plugin subprocess. A plugin without required fields is listed as soon as
+it is active.
+
 Tools are not exposed to configuration or external MCP clients. Kandev validates
 the input and optional output JSON Schemas, supplies task/session/workspace/surface
 context, enforces a 30-second deadline and 1 MiB result limit, and does not retry
