@@ -97,11 +97,17 @@ requires a new immutable submission and normal workflow/queue authority.
 
 Legacy prompt bindings may lack original-process identity and prompt generation.
 A successful native load does not supply that missing automatic-retirement proof.
-For an empty generic agent-delivery block without active recovery metadata, the
-composer offers explicit Resume through the existing authenticated retirement
+For an empty generic agent-delivery block or a submission-bound unknown-outcome
+block without active recovery metadata, the composer offers explicit Resume through the existing authenticated retirement
 transaction. Retry remains available for missing-record reconstruction, alongside
 Stop. An open block outranks a historical restored snapshot; changing that block
-invalidates pending UI results. Desktop and phone expose the same guarded actions.
+invalidates pending UI results. A cancellation status or idle session state cannot
+hide an open delivery block when no error card exists. If a current error card
+already owns the bound submission, preserve its recovery choices rather than
+replacing it with the fallback banner. Active uncertain/reconnecting protocol
+metadata retains precedence over that card. Request-local automatic launch failures
+do not displace the open block controls; they do not establish a separate persisted
+agent failure. Desktop and phone expose the same guarded actions.
 
 ## Verification
 
