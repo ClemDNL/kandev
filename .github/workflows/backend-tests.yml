@@ -89,6 +89,10 @@ jobs:
             apps/web/lib/settings-discovery/profile-contract.generated.json
             scripts/settings-contract-ci.test.mjs
             scripts/check-agentctl-deps.sh
+            scripts/*.ps1
+            scripts/*.psm1
+            scripts/tests/isolated-*
+            .gitattributes
             # check-make-shells also lints the root Makefile's $(shell ...)
             # probes, so a change there has to be able to trip it.
             Makefile
@@ -1082,7 +1086,7 @@ jobs:
       # every platform.
       - name: Test windows-sensitive packages
         if: matrix.suite == 'native'
-        run: go test -race -v -json -timeout 25m ./internal/agent/runtime/agentctl/launcher/... ./internal/common/ptyexec/... ./internal/backendapp/ownershiplock/... ./internal/system/storage/workspaces/... ./cmd/kandev/...
+        run: go test -race -v -json -timeout 25m ./internal/agent/runtime/agentctl/launcher/... ./internal/common/ptyexec/... ./internal/backendapp/ownershiplock/... ./internal/system/storage/workspaces/... ./cmd/kandev/... ./cmd/winjob/...
 
       - name: Test Windows recovery mode preservation
         if: matrix.suite == 'native'
