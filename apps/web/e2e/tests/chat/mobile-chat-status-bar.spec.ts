@@ -14,6 +14,8 @@ const test = base.extend({
   },
 });
 
+test.describe.configure({ retries: 0 });
+
 let originalAutoScrollControl = true;
 test.beforeEach(async ({ apiClient }) => {
   const { settings } = await apiClient.getUserSettings();

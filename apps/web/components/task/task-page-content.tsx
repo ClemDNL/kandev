@@ -40,7 +40,6 @@ import {
 import { TaskPageInner } from "@/components/task/task-page-inner";
 import { TaskRemovalBoundary } from "@/components/task/task-removal-boundary";
 import { GridSpinner } from "@/components/grid-spinner";
-import { toKanbanTask } from "@/lib/kanban/map-task";
 
 type TaskPageContentProps = {
   task: Task | null;
@@ -262,23 +261,6 @@ function useTaskDetailsReconnectRefresh(
   }, [connectionStatus, routeDataReady, refreshFromForeground]);
 }
 
-async function readTaskDetailsForOverview(
-  store: ReturnType<typeof useAppStoreApi>,
-  taskId: string,
-  options: Parameters<typeof readTaskNavigationIdentity>[2],
-  isCurrent: () => boolean,
-) {
-  const readId = store.getState().beginTaskOverviewRead();
-  try {
-    const response = await readTaskNavigationIdentity(store, taskId, options);
-    if (!isCurrent()) return null;
-    store.getState().retainTaskOverviews("detail", [toKanbanTask(response.task)], readId);
-    return response;
-  } finally {
-    store.getState().finishTaskOverviewRead(readId);
-  }
-}
-
 export function useTaskDetails(activeTaskId: string | null, initialTask: Task | null) {
   const store = useAppStoreApi();
   const routeDataReady = useTaskRouteSessionHydrated();
@@ -318,13 +300,13 @@ export function useTaskDetails(activeTaskId: string | null, initialTask: Task | 
       const requestedTaskId = taskId;
       const requestId = ++taskDetailsRequestIdRef.current;
       try {
-        const response = await readTaskDetailsForOverview(
-          store,
-          requestedTaskId,
-          { refresh, manualRetry, supersede, foregroundRecoveryEpisode },
-          () => isCurrentTaskDetailsRequest(requestId, requestedTaskId),
-        );
-        if (!response) return;
+        const response = await readTaskNavigationIdentity(store, requestedTaskId, {
+          refresh,
+          manualRetry,
+          supersede,
+          foregroundRecoveryEpisode,
+        });
+        if (!isCurrentTaskDetailsRequest(requestId, requestedTaskId)) return;
         setTaskDetails(response.task);
         setTaskLoadError(null);
       } catch (error) {
