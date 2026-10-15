@@ -2,6 +2,7 @@
 status: current
 system: platform
 requirements:
+  - REQ-PLATFORM-PROMPT-COMPLETION-OWNERSHIP-001
   - REQ-PLATFORM-DURABLE-AGENT-DELIVERY-006
   - REQ-PLATFORM-DURABLE-AGENT-DELIVERY-008
   - REQ-PLATFORM-DURABLE-RESTART-RECONCILIATION-001
@@ -159,3 +160,37 @@ successful resolution; a changed or unresolved inventory still refuses dispatch.
 No implicit recovery sends an old prompt. Rejected instructions retain their
 existing blocked delivery record; an unsent composer draft remains retained while the recovery controls replace
 the editor and is sent only by a subsequent explicit user submit after recovery.
+
+## Native async turn ownership
+
+Events without a submission or prompt generation after dispatched work has
+finished must not inherit that completed prompt's turn. Persist unowned native
+activity without the stale turn binding; use the existing orchestrator readiness
+snapshot to bind its completion before queued successors can start. Numbered
+completions and explicit turn identities retain their ownership checks.
+
+ACP activity retains the prompt generation captured when its notification was
+enqueued, including output drained after the prompt's control response. Buffered
+human output cannot become native async activity when the current prompt clears.
+A surviving prompt retains its restored turn while recovery adopts the first
+live completion's generation. That generation-to-turn association remains valid
+for delayed output after a successor dispatch, without allowing its completion
+to settle the successor.
+
+The ACP async idle finalizer waits for all observed foreground tools to become
+terminal. Silence while a foreground tool is active is not terminal evidence.
+Adapter-attested background workloads and nested child tools retain their own
+lifecycles. A real prompt boundary cancels the async finalizer. Terminal tool
+updates alone do not create a new async turn. No historical events, outcomes,
+live sessions, or recovery cursors are rewritten by this correction.
+
+Native ACP chunks without provider message IDs receive an adapter-issued ID
+before journal append. Chunks within the async reply share it; idle completion
+or a real prompt boundary ends that scope. Replay retains the journaled ID.
+Legacy peers use a separate opaque message scope for each preceding dispatch,
+without assigning that dispatched turn as the native event owner. Tool updates
+reuse adapter-recorded child lineage even when incremental metadata omits it.
+
+When even the legacy dispatch scope is unavailable, the durable event sequence
+is the replay-stable message scope. Without grouping evidence, separate chunks
+remain separate rows rather than merging unrelated replies.
