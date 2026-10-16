@@ -353,6 +353,13 @@ Normal launches write info and above to the file and warn and above to stdout. `
 
 Debug output may contain repository paths, subprocess output, prompts, file content, and tool-call data. Treat it as sensitive.
 
+Managed agentctl children use `AGENTCTL_LOG_FORMAT=json` so their stdout
+records pass through the backend relay's privacy projection. Approved probe
+diagnostics remain in the message; unrelated structured fields are omitted. The
+backend overrides an inherited value. `AGENTCTL_LOG_FORMAT` still configures
+agentctl processes started independently; it does not change the backend's
+`logging.format` setting.
+
 ### Repository, worktree, and clone paths
 
 | YAML key                       | Environment variable                  | Default        | Current behavior                                                                                                                                                                                                       |

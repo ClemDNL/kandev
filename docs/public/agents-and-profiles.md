@@ -697,6 +697,12 @@ compatible, with strictness off until a user enables it. Optional portable
 configuration can copy selected allowlisted files to a remote executor, but it
 cannot guarantee equal host and executor model catalogs.
 
+When a started ACP probe fails during discovery, inspect the backend logs for
+the child-side cause. Failed profile probes record the managed-runtime failure
+classification and a bounded, sanitized stderr tail while their response stays
+generic. A line cut off at the beginning of the retained tail is omitted to
+avoid exposing part of a credential.
+
 ### Monitor capability and subscription status
 
 Use the profile refresh control after installing, authenticating, or upgrading an agent. A manual refresh updates both the advertised models, modes, and commands and the visible capability status, so an old failure banner does not remain authoritative after the local CLI recovers.
