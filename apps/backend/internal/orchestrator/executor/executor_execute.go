@@ -3151,6 +3151,13 @@ func (e *Executor) startAgentOnExistingWorkspaceWithRequest(
 		((running != nil && executorRunningStatusMayOwnAgent(running.Status)) || e.agentManager.IsAgentRunningForSession(ctx, session.ID)) {
 		return nil, ErrExecutionAlreadyRunning
 	}
+	// agentctl refuses to configure a live subprocess, so starting one here can
+	// only fail the session and force-stop the agent. Sessions parked in
+	// WAITING_FOR_INPUT (clarification pause, cancelled office turn) keep their
+	// process alive, so the STARTING/RUNNING check above does not cover them.
+	if e.agentManager.IsAgentRunningForSession(ctx, session.ID) {
+		return nil, ErrExecutionAlreadyRunning
+	}
 	if refuseIfAgentRunning && e.executorHasActiveAgent(ctx, session, running) {
 		return nil, ErrExecutionAlreadyRunning
 	}

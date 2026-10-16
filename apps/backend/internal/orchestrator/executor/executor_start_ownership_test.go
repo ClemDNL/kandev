@@ -71,6 +71,51 @@ func TestExistingWorkspaceStart_ActiveAgent(t *testing.T) {
 	require.ErrorIs(t, err, ErrExecutionAlreadyRunning)
 }
 
+// Regression: an office launch (refuseIfAgentRunning=false) onto a session
+// parked in WAITING_FOR_INPUT whose agent process is still alive used to reach
+// StartAgentProcess, which agentctl rejects ("cannot configure while agent is
+// running"), failing the session and force-stopping the live agent.
+func TestExistingWorkspaceStart_LiveAgentWithoutRefuseFlag(t *testing.T) {
+	ctx := context.Background()
+	var processStarts, stopCalls atomic.Int32
+	agentManager := &mockAgentManager{
+		getExecutionIDForSessionFunc: func(context.Context, string) (string, error) {
+			return "execution-parked", nil
+		},
+		isAgentRunningForSessionFunc: func(context.Context, string) bool { return true },
+		startAgentProcessFunc: func(context.Context, string) error {
+			processStarts.Add(1)
+			return nil
+		},
+		stopAgentWithReasonFunc: func(context.Context, string, string, bool) error {
+			stopCalls.Add(1)
+			return nil
+		},
+	}
+	repo := newMockRepository()
+	exec := newTestExecutor(t, agentManager, repo)
+	task := &v1.Task{ID: "task-parked", WorkspaceID: "workspace-parked"}
+	session := &models.TaskSession{
+		ID: "session-parked", TaskID: task.ID, State: models.TaskSessionStateWaitingForInput,
+		AgentProfileID: "profile-parked",
+	}
+	repo.sessions[session.ID] = cloneMockTaskSession(session)
+	request := &LaunchAgentRequest{
+		TaskID: task.ID, WorkspaceID: task.WorkspaceID, SessionID: session.ID,
+		ExecutorType: "local_pc",
+	}
+
+	_, err := exec.startAgentOnExistingWorkspaceWithRequest(
+		ctx, task, session, "assigned", true, "", request, nil, nil, nil, nil, false,
+	)
+
+	require.ErrorIs(t, err, ErrExecutionAlreadyRunning)
+	require.Zero(t, processStarts.Load(), "a second agent process must not start")
+	require.Zero(t, stopCalls.Load(), "the live agent must not be stopped")
+	require.Equal(t, models.TaskSessionStateWaitingForInput, repo.sessions[session.ID].State,
+		"the parked session must not be moved to STARTING")
+}
+
 func TestExistingWorkspaceStart_PreparedWorkspaceCanStart(t *testing.T) {
 	ctx := context.Background()
 	started := make(chan struct{}, 1)
